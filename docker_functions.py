@@ -188,8 +188,10 @@ async def plex_status_command(interaction: discord.Interaction):
                 f"**{container}** (Running: {status['running']}, Health: {status['health'] if status['health'] else 'N/A'})"
             )
 
+    # FIX: Corrected f-string usage for newlines
     if broken_containers:
-        await interaction.response.send_message(f"Problem containers detected:\n{'\n'.join(broken_containers)}")
+        newline = '\n'  # Define newline character outside the f-string expression
+        await interaction.response.send_message(f"Problem containers detected:{newline}{newline.join(broken_containers)}")
     else:
         await interaction.response.send_message("All monitored Docker containers are running and healthy! ✅")
 
