@@ -59,7 +59,7 @@ async def fetch_overseerr_users():
         logging.warning("Overseerr API config missing. Skipping user sync.")
         return
 
-    url = f"{OVERSEERR_CONFIG['base_url'].rstrip('/')}/api/v1/users"
+    url = f"{OVERSEERR_CONFIG['base_url'].rstrip('/')}/api/v1/user"
     headers = {"X-Api-Key": OVERSEERR_CONFIG['api_key']}
 
     try:
