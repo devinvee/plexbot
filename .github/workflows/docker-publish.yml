@@ -37,6 +37,5 @@ jobs:
                   file: ./Dockerfile
                   push: true
                   tags: |
-                      # Now, you no longer need the 'lower()' function here
                       ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
                       ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
