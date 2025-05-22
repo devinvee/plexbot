@@ -59,17 +59,74 @@ async def fetch_overseerr_users():
         logging.warning("Overseerr API config missing. Skipping user sync.")
         return
 
+    # Corrected endpoint
     url = f"{OVERSEERR_CONFIG['base_url'].rstrip('/')}/api/v1/user"
-    headers = {"X-Api-Key": OVERSEERR_CONFIG['api_key']}
+    # Added Accept header
+    headers = {
+        "X-Api-Key": OVERSEERR_CONFIG['api_key'], "Accept": "application/json"}
+    logging.info(f"Attempting to fetch Overseerr users from: {url}")
 
     try:
-        response = await asyncio.to_thread(requests.get, url, headers=headers)
-        response.raise_for_status()
-        users = response.json()
+        # Added timeout
+        response = await asyncio.to_thread(requests.get, url, headers=headers, timeout=15)
+
+        # --- NEW LOGGING STATEMENTS & ERROR HANDLING ---
+        logging.info(
+            f"Overseerr API Response Status Code: {response.status_code}")
+        logging.info(f"Overseerr API Response Headers: {response.headers}")
+        # Log the raw text response before attempting JSON parsing
+        logging.info(
+            f"Overseerr API Raw Response Text (first 500 chars): {response.text[:500]}...")
+
+        response.raise_for_status()  # This will raise an HTTPError for 4xx/5xx responses
+
+        users = None  # Initialize users to None
+
+        try:
+            users = response.json()
+            logging.info(
+                f"Successfully parsed Overseerr API response as JSON.")
+            logging.info(f"Type of parsed 'users' object: {type(users)}")
+            # Log full content if it's small, otherwise just the first few items or a sample
+            if isinstance(users, list) and len(users) > 0:
+                logging.info(
+                    f"Content of parsed 'users' (first 2 items): {users[:2]}")
+            elif isinstance(users, dict):
+                logging.info(f"Content of parsed 'users' (full dict): {users}")
+            else:
+                logging.info(
+                    f"Content of parsed 'users' (unexpected type): {users}")
+
+        except requests.exceptions.JSONDecodeError as e:
+            logging.error(
+                f"Failed to decode JSON response from Overseerr: {e}")
+            logging.error(f"Full problematic response text: {response.text}")
+            return  # Exit function if response is not JSON
+
+        # Ensure 'users' is a list to iterate over
+        if not isinstance(users, list):
+            logging.warning(
+                f"Overseerr API returned an unexpected type for users. Expected list, got {type(users)}. Attempting to wrap if it's a single dict.")
+            if isinstance(users, dict):
+                # If it's a single user object (which /api/v1/user could return for some Overseerr versions/configs)
+                users = [users]
+            else:
+                logging.error(
+                    "Overseerr API response is neither a list nor a dictionary. Cannot process.")
+                return  # Cannot proceed if it's not a list or single dict
+
+        # --- END NEW LOGGING STATEMENTS & ERROR HANDLING ---
 
         # Clear existing data before populating
         OVERSEERR_USERS_DATA.clear()
         for user in users:
+            # Ensure 'user' is a dictionary before calling .get()
+            if not isinstance(user, dict):
+                logging.error(
+                    f"Skipping unexpected item in Overseerr users list. Expected dict, got {type(user)}: {user}")
+                continue  # Skip this item and continue with the next one
+
+            # This is the line that was failing
             plex_username = user.get('plexUsername')
 
             # Check if this plex_username is in our static USER_MAPPINGS to get Discord ID
@@ -84,11 +141,20 @@ async def fetch_overseerr_users():
         logging.info(
             f"Successfully synced {len(OVERSEERR_USERS_DATA)} Overseerr users.")
 
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Error fetching Overseerr users: {e}")
-    except Exception as e:
+    except requests.exceptions.HTTPError as e:
+        # Catch specific HTTP errors (like 401, 403, 500)
         logging.error(
-            f"An unexpected error occurred during Overseerr user sync: {e}")
+            f"HTTP Error fetching Overseerr users (Status: {e.response.status_code}): {e}")
+        logging.error(f"Response body for HTTP error: {e.response.text}")
+    except requests.exceptions.RequestException as e:
+        # Catch general request errors (like network issues, timeouts)
+        logging.error(
+            f"Network or request error fetching Overseerr users: {e}")
+    except Exception as e:
+        # Catch any other unexpected errors
+        # exc_info to get full traceback
+        logging.error(
+            f"An unexpected error occurred during Overseerr user sync: {e}", exc_info=True)
 
 
 def get_discord_user_ids_for_tags(media_tags: list) -> set:
