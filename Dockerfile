@@ -8,10 +8,11 @@ WORKDIR /app
 COPY requirements.txt .
 
 # Install any needed packages specified in requirements.txt
-RUN pip install --no-cache-dir -r pip install -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt # <--- FIX IS HERE
 
 # Copy all Python files (*.py) from your repo root to /app in container
 COPY *.py .
+# REMOVED: COPY config.json . # This is correct for the volume mount strategy
 
 # The command to run the bot when the container starts
 CMD ["python", "bot.py"]
