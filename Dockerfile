@@ -8,12 +8,10 @@ WORKDIR /app
 COPY requirements.txt .
 
 # Install any needed packages specified in requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r pip install -r requirements.txt
 
-# Copy all Python files and the config.json into the container's /app
-# This includes bot.py, media_watcher_service.py, and now utils.py
+# Copy all Python files (*.py) from your repo root to /app in container
 COPY *.py .
-COPY config.json .
 
 # The command to run the bot when the container starts
 CMD ["python", "bot.py"]
