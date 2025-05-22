@@ -278,20 +278,11 @@ async def check_premium_expiry():
 
 
 @bot.event
+@bot.event
 async def on_ready():
     """Event that fires when the bot is ready and connected to Discord."""
     logging.info(f"Logged in as {bot.user} (ID: {bot.user.id})")
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
-
-    # Register slash commands
-    bot.tree.command(name="plexstatus", description="Check Plex Docker container status.")(
-        plex_status_command)
-    bot.tree.command(name="restartcontainers", description="Restart specified Docker containers in order.")(
-        restart_containers_command)
-    bot.tree.command(name="restartplex", description="Restart Plex container.")(
-        restart_plex_command)
-    bot.tree.command(
-        name="realdebrid", description="Check your Real-Debrid account status.")(realdebrid_status_command)
 
     # Sync slash commands globally (or to specific guild for faster testing)
     try:
