@@ -8,7 +8,8 @@ on:
 
 env:
   REGISTRY: ghcr.io # Specify the registry URL for GHCR
-  IMAGE_NAME: ${{ lower(github.repository) }} # Automatically uses your 'owner/repo-name' as the image name
+  # REMOVE OR COMMENT OUT THIS LINE: IMAGE_NAME: ${{ lower(github.repository) }}
+  # We will define the lowercase image name directly in the tags section below.
 
 jobs:
   build-and-push:
@@ -39,5 +40,6 @@ jobs:
           file: ./Dockerfile # Path to your Dockerfile
           push: true # Push the image to the registry
           tags: | # Define the image tags to apply
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+            # APPLY lower() FUNCTION HERE for the repository name
+            ${{ env.REGISTRY }}/${{ lower(github.repository) }}:latest
+            ${{ env.REGISTRY }}/${{ lower(github.repository) }}:${{ github.sha }}
