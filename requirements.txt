@@ -4,5 +4,5 @@ paramiko
 asyncio
 requests
 python-dotenv
-Flask
+Flask[async]
 docker
