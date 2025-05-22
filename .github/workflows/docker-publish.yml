@@ -37,5 +37,5 @@ jobs:
                   file: ./Dockerfile
                   push: true
                   tags: |
-                      ${{ env.REGISTRY }}/${{ lower(github.repository) }}:latest
-                      ${{ env.REGISTRY }}/${{ lower(github.repository) }}:${{ github.sha }}
+                      ${{ env.REGISTRY }}/${{ github.repository }}:latest
+                      ${{ env.REGISTRY }}/${{ github.repository }}:${{ github.sha }}
