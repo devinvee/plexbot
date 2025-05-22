@@ -8,7 +8,7 @@ on:
 
 env:
   REGISTRY: ghcr.io # Specify the registry URL for GHCR
-  IMAGE_NAME: ${{ github.repository }} # Automatically uses your 'owner/repo-name' as the image name
+  IMAGE_NAME: ${{ lower(github.repository) }} # Automatically uses your 'owner/repo-name' as the image name
 
 jobs:
   build-and-push:
