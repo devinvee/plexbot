@@ -4,7 +4,7 @@
 		"dm_notifications_enabled": true
 	},
 	"overseerr": {
-		"base_url": "${OVERSEERR_BASE_URL}/api/v1",
+		"base_url": "${OVERSEERR_BASE_URL}",
 		"api_key": "${OVERSEERR_API_KEY}",
 		"refresh_interval_minutes": 60
 	},
