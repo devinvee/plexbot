@@ -39,5 +39,5 @@ jobs:
           file: ./Dockerfile # Path to your Dockerfile
           push: true # Push the image to the registry
           tags: | # Define the image tags to apply
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest # Tag as 'latest'
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} # Tag with the full commit SHA
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
