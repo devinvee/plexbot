@@ -1,11 +1,18 @@
 import json
 import os
 import re
+import logging  # Import logging
 from dotenv import load_dotenv
 
 # Load environment variables from .env file at the very start
 # This ensures os.getenv() calls later will find them.
 load_dotenv()
+
+# Get a logger for this module.
+# Note: Basic logging config is usually done in the main script.
+# If this utility is called very early, it might use Python's default logger
+# until main.py's logging.basicConfig takes effect.
+logger = logging.getLogger(__name__)
 
 
 def load_config(config_file_path="config.json"):
@@ -17,9 +24,16 @@ def load_config(config_file_path="config.json"):
     try:
         with open(config_file_path, 'r') as f:
             config = json.load(f)
+        # Info level
+        logger.info(f"Successfully opened and loaded '{config_file_path}'.")
     except FileNotFoundError:
+        # Use logger.error as this is a critical failure.
+        # It will likely be caught by the calling script and cause exit.
+        logger.error(f"Config file '{config_file_path}' not found.")
         raise FileNotFoundError(f"Config file '{config_file_path}' not found.")
     except json.JSONDecodeError as e:
+        logger.error(
+            f"Error parsing config file '{config_file_path}': {e.msg} at position {e.pos}.")
         raise json.JSONDecodeError(
             f"Error parsing config file '{config_file_path}': {e.msg}", e.doc, e.pos)
 
@@ -36,13 +50,23 @@ def load_config(config_file_path="config.json"):
                 env_var_name = match.group(1)
                 value = os.getenv(env_var_name)
                 if value is None:
-                    # You might want to raise an error here if a critical env var is missing
-                    print(
-                        f"Warning: Environment variable '{env_var_name}' referenced in config.json is not set. Using placeholder.")
+                    # Use logger.warning. This will be captured if logging is set up.
+                    # For very early calls, it might default to stderr.
+                    logger.warning(
+                        f"Environment variable '{env_var_name}' referenced in config.json is not set. "
+                        f"Returning placeholder string '{obj}'.")
                     return obj  # Return the placeholder string if not found
+                # Debug level
+                logger.debug(
+                    f"Replaced placeholder '{obj}' with environment variable '{env_var_name}' value.")
                 return value
             return obj
         else:
             return obj
 
-    return replace_placeholders(config)
+    processed_config = replace_placeholders(config)
+    logger.info("Configuration placeholders processed.")  # Info level
+    # Debug level
+    logger.debug(
+        f"Final processed config (first 500 chars): {json.dumps(processed_config, indent=2)[:500]}...")
+    return processed_config

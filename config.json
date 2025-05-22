@@ -32,5 +32,6 @@
 		"plex_to_discord": {
 			"devinvee": "${DEVINVEE_DISCORD_ID}"
 		}
-	}
+	},
+	"log_level": "${LOG_LEVEL}"
 }

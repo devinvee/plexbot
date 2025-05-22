@@ -17,32 +17,66 @@ from media_watcher_service import setup_media_watcher_service
 try:
     import docker
 except ImportError:
+    # This initial error logging will use Python's default logging behavior
+    # which is usually INFO or WARNING level to console.
     logging.error(
         "The 'docker' library is not installed. Docker commands will not work.")
     docker = None  # Set to None so we can check if it's available
-
-# --- Logging Setup ---
-# Configure logging to output to stdout for Docker logs
-logging.basicConfig(level=logging.INFO,
-                    format='%(asctime)s %(levelname)-8s %(name)-15s %(message)s',
-                    handlers=[logging.StreamHandler()])
-logging.getLogger('discord').setLevel(
-    logging.INFO)  # Keep discord.py logs at INFO
-logging.getLogger('asyncio').setLevel(
-    logging.WARNING)  # Reduce asyncio verbosity
-logging.getLogger('requests').setLevel(
-    logging.WARNING)  # Reduce requests verbosity
 
 # --- Configuration Loading ---
 CONFIG_FILE = "config.json"
 config = {}
 try:
     config = load_config(CONFIG_FILE)
+    # This initial log will still use default logging.basicConfig level (INFO by default)
     logging.info("Configuration loaded successfully.")
 except (FileNotFoundError, json.JSONDecodeError) as e:
     logging.error(
         f"Error loading configuration from '{CONFIG_FILE}': {e}. Exiting.")
     exit(1)  # Exit if essential config cannot be loaded
+
+# --- Logging Setup (MOVED AND MODIFIED) ---
+# 1. Get the desired log level from config.json, defaulting to INFO if not found
+configured_log_level_str = config.get("log_level", "INFO").upper()
+
+# 2. Map the string level to a logging constant
+LOGGING_LEVELS = {
+    "DEBUG": logging.DEBUG,
+    "INFO": logging.INFO,
+    "WARNING": logging.WARNING,
+    "ERROR": logging.ERROR,
+    "CRITICAL": logging.CRITICAL
+}
+
+# 3. Get the actual logging level constant. Use INFO as a fallback for invalid strings.
+log_level = LOGGING_LEVELS.get(configured_log_level_str, logging.INFO)
+
+# 4. Re-configure the basic logger with the dynamic level
+# We re-run basicConfig here, which effectively updates the root logger's level.
+# It's important to do this *after* config is loaded.
+logging.basicConfig(
+    level=log_level,  # Use the configured log level here
+    format='%(asctime)s %(levelname)-8s %(name)-15s %(message)s',
+    # Ensure it still outputs to stdout for Docker logs
+    handlers=[logging.StreamHandler()]
+)
+
+# 5. Set specific log levels for chatty libraries.
+# You can make discord.py logs INFO or DEBUG if your main log_level is DEBUG,
+# otherwise keep them at WARNING to avoid excessive output.
+if log_level <= logging.INFO:  # If your root logger is INFO or DEBUG
+    logging.getLogger('discord').setLevel(logging.INFO)
+else:  # If your root logger is WARNING, ERROR, or CRITICAL
+    logging.getLogger('discord').setLevel(logging.WARNING)
+
+logging.getLogger('asyncio').setLevel(
+    logging.WARNING)  # Reduce asyncio verbosity
+logging.getLogger('requests').setLevel(
+    logging.WARNING)  # Reduce requests verbosity
+# For Flask server logs, often very verbose
+logging.getLogger('werkzeug').setLevel(logging.WARNING)
+# --- END LOGGING SETUP ---
+
 
 # Retrieve Discord token directly from environment variables (best practice)
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
@@ -52,6 +86,7 @@ NOTIFICATION_CHANNEL_ID_FROM_CONFIG = config.get(
     "discord", {}).get("notification_channel_id")
 
 if not DISCORD_TOKEN:
+    # This log will now use the new, configured log level
     logging.error(
         "DISCORD_TOKEN environment variable not set. Please add it to your .env file. Exiting.")
     exit(1)
@@ -62,6 +97,7 @@ if NOTIFICATION_CHANNEL_ID_FROM_CONFIG:
     try:
         CHANNEL_ID_INT = int(NOTIFICATION_CHANNEL_ID_FROM_CONFIG)
     except ValueError:
+        # This log will also use the new, configured log level
         logging.error(
             f"Discord notification_channel_id '{NOTIFICATION_CHANNEL_ID_FROM_CONFIG}' in config.json is not a valid integer. Check your .env value for DISCORD_CHANNEL_ID.")
 else:
@@ -90,9 +126,8 @@ def _get_docker_client():
 
 # --- Discord Bot Commands ---
 
+
 # 1. Plex Status Command
-
-
 @bot.tree.command(name="plexstatus", description="Check Plex Docker container status.")
 async def plex_status_command(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=False)  # Defer publicly
@@ -128,8 +163,8 @@ async def restart_containers_command(interaction: discord.Interaction):
     # <<--- IMPORTANT: Customize this list with your actual container names and desired restart order
     containers_to_restart_in_order = [
         "qbittorrent",  # Example: Restart download client first
-        "sonarr",      # Example: Restart Sonarr next
-        "radarr",      # Example: Restart Radarr next
+        "sonarr",       # Example: Restart Sonarr next
+        "radarr",       # Example: Restart Radarr next
         # Example: Restart Plex last (after its dependencies are up)
         "Plex"
     ]
@@ -278,10 +313,10 @@ async def check_premium_expiry():
 
 
 @bot.event
-@bot.event
 async def on_ready():
     """Event that fires when the bot is ready and connected to Discord."""
     logging.info(f"Logged in as {bot.user} (ID: {bot.user.id})")
+    # Consider removing print if logs are sufficient
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
 
     # Sync slash commands globally (or to specific guild for faster testing)
@@ -293,9 +328,11 @@ async def on_ready():
         # synced = await bot.tree.sync(guild=guild)
 
         logging.info(f"Synced {len(synced)} command(s) globally.")
+        # Consider removing print if logs are sufficient
         print(f"Synced {len(synced)} command(s) globally.")
     except Exception as e:
         logging.error(f"Failed to sync commands: {e}")
+        # Consider removing print if logs are sufficient
         print(f"Failed to sync commands: {e}")
 
     # Send startup message to Discord channel
@@ -336,4 +373,5 @@ async def on_close():
 # --- Main Entry Point ---
 if __name__ == "__main__":
     # The `load_dotenv()` call is handled internally by `utils.py` when imported.
+    # This bot.run call is the blocking operation that keeps the bot alive.
     bot.run(DISCORD_TOKEN)
