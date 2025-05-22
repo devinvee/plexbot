@@ -1,0 +1,36 @@
+{
+	"discord": {
+		"notification_channel_id": "${DISCORD_CHANNEL_ID}",
+		"dm_notifications_enabled": true
+	},
+	"overseerr": {
+		"base_url": "${OVERSEERR_BASE_URL",
+		"api_key": "${OVERSEERR_API_KEY}",
+		"refresh_interval_minutes": 60
+	},
+	"sonarr_instances": [
+		{
+			"name": "Sonarr",
+			"url": "${SONARR_URL}",
+			"api_key": "${SONARR_API_KEY}",
+			"enabled": true
+		},
+		{
+			"name": "Anime",
+			"url": "${SONARR_ANIME_URL}",
+			"api_key": "${SONARR_ANIME_API_KEY}",
+			"enabled": true
+		},
+		{
+			"name": "Sonarr-4k",
+			"url": "${SONARR_4K_URL}",
+			"api_key": "${SONARR_4K_API_KEY}",
+			"enabled": true
+		}
+	],
+	"user_mappings": {
+		"plex_to_discord": {
+			"devinvee": "${DEVINVEE_DISCORD_ID}"
+		}
+	}
+}
