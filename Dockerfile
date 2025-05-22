@@ -1,17 +1,17 @@
 # Use an official Python runtime as a parent image
-FROM python:3.9-slim-buster
+FROM python:3.11-slim-bookworm
 
 # Set the working directory in the container
 WORKDIR /app
 
-# Copy the current directory contents into the container at /app
-COPY . /app
+# Copy the requirements file into the container at /app
+COPY requirements.txt .
 
 # Install any needed packages specified in requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Make port 32400 available to the world outside this container
-EXPOSE 32400
+# Copy all Python files from the current directory into the container's /app
+COPY *.py .
 
-# Run app.py when the container launches
-CMD ["python3", "discord_plex_bot.py"]
+# The command to run the bot when the container starts
+CMD ["python", "bot.py"]
