@@ -1,4 +1,4 @@
-# .github/workflows/build-and-push-docker.yml
+# .github/workflows/build-and-push-docker.yml (or docker-publish.yml)
 name: Build and Push Docker Image to GHCR
 
 on:
@@ -8,8 +8,8 @@ on:
 
 env:
   REGISTRY: ghcr.io # Specify the registry URL for GHCR
-  # REMOVE OR COMMENT OUT THIS LINE: IMAGE_NAME: ${{ lower(github.repository) }}
-  # We will define the lowercase image name directly in the tags section below.
+  # IMAGE_NAME can now directly use github.repository as it's already lowercase
+  IMAGE_NAME: ${{ github.repository }} # This will now be 'your-username/plexbot'
 
 jobs:
   build-and-push:
@@ -40,6 +40,6 @@ jobs:
           file: ./Dockerfile # Path to your Dockerfile
           push: true # Push the image to the registry
           tags: | # Define the image tags to apply
-            # APPLY lower() FUNCTION HERE for the repository name
-            ${{ env.REGISTRY }}/${{ lower(github.repository) }}:latest
-            ${{ env.REGISTRY }}/${{ lower(github.repository) }}:${{ github.sha }}
+            # Now, you no longer need the 'lower()' function here
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
