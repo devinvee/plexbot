@@ -6,7 +6,8 @@ import asyncio
 import requests
 import re
 from collections import deque
-import discord  # Import discord.py for type hinting or actual use if bot instance is passed
+import discord
+from datetime import datetime
 
 # Import the shared utility function (assuming utils.py is in the same directory)
 from utils import load_config
@@ -164,47 +165,55 @@ def get_discord_user_ids_for_tags(media_tags: list) -> set:
     return users_to_notify
 
 
-async def send_discord_notification(bot_instance, user_ids: set, message: str, channel_id: str):
-    """Sends a message to a channel and/or DMs users."""
+async def send_discord_notification(bot_instance, user_ids: set, message_content: str, channel_id: str, embed: discord.Embed = None):
+    """Sends a message with optional embed to a channel and/or DMs users."""
     if not bot_instance:
-        logger.error(
-            "Discord bot instance not passed to send_discord_notification. Cannot send messages.")
+        logger.error("Discord bot instance not passed. Cannot send messages.")
         return
 
+    # Send to the main channel if channel_id is provided
     if channel_id:
         try:
             channel_id_int = int(channel_id)
             channel = bot_instance.get_channel(channel_id_int)
             if channel:
                 logger.info(
-                    f"Sending notification to channel {channel_id_int}.")
-                await channel.send(message)
+                    f"Sending notification with embed to channel {channel_id_int}.")
+                await channel.send(content=message_content if message_content else None, embed=embed)
             else:
                 logger.warning(
                     f"Could not find notification channel with ID: {channel_id}")
         except ValueError:
             logger.error(
                 f"Invalid notification_channel_id: {channel_id}. Must be an integer.")
+        except Exception as e:
+            logger.error(
+                f"Error sending message/embed to channel {channel_id}: {e}", exc_info=True)
 
-    if DM_NOTIFICATIONS_ENABLED:
+    # Send DMs if enabled and there are users to notify
+    if DM_NOTIFICATIONS_ENABLED and user_ids:
+        dm_message_content = message_content  # Or a simplified version for DMs
         for user_id_str in user_ids:
             try:
                 user_id_int = int(user_id_str)
                 user = await bot_instance.fetch_user(user_id_int)
                 logger.info(
-                    f"Attempting to DM user {user.name} ({user_id_int}).")
-                await user.send(message)
+                    f"Attempting to DM user {user.name} ({user_id_int}) with embed.")
+                # For DMs, you might choose to send a simpler message or the full embed.
+                # Here, we send the same content and embed as to the channel.
+                await user.send(content=dm_message_content if dm_message_content else None, embed=embed)
             except ValueError:
                 logger.warning(
-                    f"Discord user ID {user_id_str} is not a valid integer. Skipping DM.")
+                    f"Discord user ID {user_id_str} is not a valid integer for DM. Skipping.")
             except discord.NotFound:
                 logger.warning(
-                    f"Discord user with ID {user_id_str} not found.")
+                    f"Discord user with ID {user_id_str} not found for DM.")
             except discord.Forbidden:
                 logger.warning(
-                    f"Could not DM user {user_id_str}. They might have DMs disabled.")
+                    f"Could not DM user {user_id_str}. They might have DMs disabled or bot lacks permission.")
             except Exception as e:
-                logger.error(f"Error sending DM to {user_id_str}: {e}")
+                logger.error(
+                    f"Error sending DM to {user_id_str}: {e}", exc_info=True)
 
 # --- Webhook Endpoints ---
 
@@ -215,14 +224,14 @@ async def send_discord_notification(bot_instance, user_ids: set, message: str, c
 
 
 @app.route('/webhook/sonarr', methods=['POST'])
-async def sonarr_webhook():  # Flask 2.0+ allows async route handlers
+async def sonarr_webhook():
     payload = request.json
     logger.info(
         f"Received Sonarr webhook: {payload.get('eventType')} from {request.remote_addr}")
     logger.debug(f"Sonarr webhook payload: {json.dumps(payload, indent=2)}")
 
     event_type = payload.get('eventType')
-    bot_instance = app.config.get('discord_bot')  # Get the bot instance
+    bot_instance = app.config.get('discord_bot')
 
     if not bot_instance:
         logger.error(
@@ -230,102 +239,193 @@ async def sonarr_webhook():  # Flask 2.0+ allows async route handlers
         return jsonify({"status": "error", "message": "Bot instance not configured"}), 500
 
     if event_type == "Test":
-        logger.info(
-            "Sonarr Test webhook received. Attempting to send Discord notification.")
+        logger.info("Sonarr Test webhook received and processed successfully!")
         test_notification_message = "Sonarr webhook test successful! Connectivity is confirmed."
 
+        embed = discord.Embed(
+            title="Sonarr Test Successful!",
+            description="This confirms that your Plexbot is receiving webhooks from Sonarr correctly.",
+            color=discord.Color.green()
+        )
+        if bot_instance.user and bot_instance.user.avatar:
+            embed.set_author(name="Plexbot Notification Service",
+                             icon_url=bot_instance.user.avatar.url)
+        else:
+            embed.set_author(name="Plexbot Notification Service")
+        embed.timestamp = datetime.utcnow()
+
         if NOTIFICATION_CHANNEL_ID:
-            # Create a coroutine object for the notification
             coro = send_discord_notification(
                 bot_instance=bot_instance,
                 user_ids=set(),
-                message=test_notification_message,
-                channel_id=NOTIFICATION_CHANNEL_ID
+                message_content=None,  # No pings for a test message
+                channel_id=NOTIFICATION_CHANNEL_ID,
+                embed=embed
             )
-            # Schedule it on the bot's event loop from this (Flask) thread
             future = asyncio.run_coroutine_threadsafe(coro, bot_instance.loop)
             try:
-                # Optionally wait for the result with a timeout
-                future.result(timeout=10)  # e.g., 10 seconds
+                future.result(timeout=10)
                 logger.info("Discord notification for Sonarr Test completed.")
-            except asyncio.TimeoutError:
-                logger.error(
-                    "Sending Discord notification for Sonarr Test timed out.")
             except Exception as e:
                 logger.error(
-                    f"Error running Sonarr Test Discord notification via threadsafe call: {e}", exc_info=True)
+                    f"Error running Sonarr Test Discord notification: {e}", exc_info=True)
         else:
             logger.warning(
                 "Discord notification_channel_id not set; cannot send Sonarr Test notification.")
 
-        return jsonify({"status": "success", "message": "Test webhook processed"}), 200
+        return jsonify({"status": "success", "message": "Test webhook processed successfully"}), 200
 
     elif event_type in ['Download', 'Episode Imported']:
-        series = payload.get('series', {})
-        episodes = payload.get('episodes', [])
-        release = payload.get('release', {})
+        series_data = payload.get('series', {})
+        episodes_data = payload.get('episodes', [])  # This is a list
+        release_data = payload.get('release', {})
 
-        if not series or not episodes:
+        if not series_data or not episodes_data:
             logger.warning(
-                "Sonarr webhook payload missing series or episodes data for Download/Import event.")
+                "Sonarr webhook missing series or episodes data for Download/Import.")
             return jsonify({"status": "error", "message": "Missing series or episode data"}), 400
 
-        series_title = series.get('title')
-        series_id = series.get('id')
-        series_tags = series.get('tagsArray', [])
+        # Assuming one episode per Download/Import webhook for notification simplicity
+        # If multiple episodes can arrive in one webhook, you might loop or adjust
+        episode_data = episodes_data[0]
 
-        users_to_ping = get_discord_user_ids_for_tags(series_tags)
+        series_title = series_data.get('title', "Unknown Series")
+        series_year = series_data.get('year')
+        season_number = episode_data.get('seasonNumber', 0)
+        episode_number = episode_data.get('episodeNumber', 0)
+        episode_title = episode_data.get('title', "Unknown Episode")
+        episode_overview = episode_data.get(
+            'overview', "No overview available.")
+        air_date_utc_str = episode_data.get('airDateUtc')
 
-        # Construct the full notification message once
-        # (This part seems fine, assuming the loop for episodes doesn't change the core message structure much,
-        # but rather the details like episode title, number)
+        quality = release_data.get('quality', "N/A")
+        # Attempt to get more specific quality from custom formats if it's a V2+
+        if release_data.get('qualityVersion', 0) > 1 and release_data.get('customFormats'):
+            quality = f"{quality} ({', '.join(release_data.get('customFormats', []))})"
 
-        for episode in episodes:
-            episode_id = episode.get('id')
-            episode_number = episode.get('episodeNumber')
-            season_number = episode.get('seasonNumber')
-            episode_title = episode.get('title')
+        # --- Construct the Embed ---
+        embed_title = f"{series_title}"
+        if series_year:
+            embed_title += f" ({series_year})"
+        embed_title += f" (S{season_number:02d}E{episode_number:02d})"
 
-            episode_unique_id = (series_id, episode_id,
-                                 release.get('releaseTitle'))
+        embed = discord.Embed(
+            title=embed_title,
+            color=discord.Color.green()  # Green accent like the example
+        )
 
-            if episode_unique_id in NOTIFIED_EPISODES_CACHE:
-                logger.info(
-                    f"Episode {series_title} S{season_number:02d}E{episode_number:02d} (Release: {release.get('releaseTitle')}) already notified. Skipping.")
-                continue
+        if bot_instance.user and bot_instance.user.avatar:
+            embed.set_author(name="New Episode Available - Sonarr",
+                             icon_url=bot_instance.user.avatar.url)
+        else:
+            embed.set_author(name="New Episode Available - Sonarr")
 
-            NOTIFIED_EPISODES_CACHE.append(episode_unique_id)
+        embed.add_field(name="Episode Title",
+                        value=episode_title if episode_title else "N/A", inline=False)
 
-            mentions = " ".join([f"<@{uid}>" for uid in users_to_ping])
-            notification_message_content = (
-                f"🎉 {mentions} **New Episode Available!** 🎉\n"
-                f"**Series:** {series_title}\n"
-                f"**Episode:** S{season_number:02d}E{episode_number:02d} - {episode_title}\n"
-                f"It's now available for streaming!"
+        # Truncate overview if too long
+        if len(episode_overview) > 1020:
+            episode_overview = episode_overview[:1020] + "..."
+        embed.add_field(name=f"E{episode_number} Overview",
+                        value=episode_overview, inline=False)
+
+        if air_date_utc_str:
+            try:
+                air_date = datetime.fromisoformat(
+                    air_date_utc_str.replace('Z', '+00:00'))
+                embed.add_field(name="Air Date", value=air_date.strftime(
+                    '%m/%d/%Y'), inline=True)
+            except ValueError:
+                logger.warning(
+                    f"Could not parse airDateUtc: {air_date_utc_str}")
+                embed.add_field(name="Air Date", value="N/A", inline=True)
+        else:
+            embed.add_field(name="Air Date", value="N/A", inline=True)
+
+        embed.add_field(name="Quality", value=quality, inline=True)
+
+        # Thumbnail (Series Poster)
+        series_images = series_data.get('images', [])
+        poster_url = None
+        for img in series_images:
+            if img.get('coverType') == 'poster' and img.get('remoteUrl'):  # Sonarr v4 uses remoteUrl
+                poster_url = img.get('remoteUrl')
+            # Older Sonarr might use url
+            elif img.get('coverType') == 'poster' and img.get('url'):
+                poster_url = img.get('url')
+            if poster_url:
+                break
+        if poster_url:
+            embed.set_thumbnail(url=poster_url)
+
+        # Large Image (Series Fanart or Episode Screenshot if available)
+        # For now, using fanart as episode-specific images are less common in Sonarr webhooks
+        fanart_url = None
+        for img in series_images:  # Check series images first
+            if img.get('coverType') == 'fanart' and img.get('remoteUrl'):
+                fanart_url = img.get('remoteUrl')
+            elif img.get('coverType') == 'fanart' and img.get('url'):
+                fanart_url = img.get('url')
+            if fanart_url:
+                break
+
+        # Sonarr v4 episode objects might have an 'images' array for screenshots
+        episode_images = episode_data.get('images', [])
+        if episode_images:
+            # Prefer episode image if available, assuming first one is good
+            if episode_images[0].get('remoteUrl'):
+                fanart_url = episode_images[0].get('remoteUrl')
+            elif episode_images[0].get('url'):
+                fanart_url = episode_images[0].get('url')
+
+        if fanart_url:
+            embed.set_image(url=fanart_url)
+
+        embed.timestamp = datetime.utcnow()  # Sets the footer timestamp
+
+        # --- End Embed Construction ---
+
+        users_to_ping = get_discord_user_ids_for_tags(
+            series_data.get('tagsArray', []))
+        mentions_text = " ".join(
+            [f"<@{uid}>" for uid in users_to_ping]) if users_to_ping else ""
+
+        # De-duplication logic (using only the first episode for this notification)
+        series_id_for_dedupe = series_data.get('id')
+        episode_id_for_dedupe = episode_data.get('id')
+        release_title_for_dedupe = release_data.get('releaseTitle')
+        episode_unique_id = (series_id_for_dedupe,
+                             episode_id_for_dedupe, release_title_for_dedupe)
+
+        if episode_unique_id in NOTIFIED_EPISODES_CACHE:
+            logger.info(
+                f"Episode {series_title} S{season_number:02d}E{episode_number:02d} (Release: {release_title_for_dedupe}) already notified based on cache. Skipping.")
+            return jsonify({"status": "success", "message": "Already notified, skipped"}), 200
+
+        NOTIFIED_EPISODES_CACHE.append(episode_unique_id)
+
+        if users_to_ping or NOTIFICATION_CHANNEL_ID:
+            coro = send_discord_notification(
+                bot_instance=bot_instance,
+                user_ids=users_to_ping,
+                message_content=mentions_text,
+                channel_id=NOTIFICATION_CHANNEL_ID,
+                embed=embed
             )
-
-            if users_to_ping or NOTIFICATION_CHANNEL_ID:  # Send if there's someone to DM or a channel to post in
-                coro = send_discord_notification(
-                    bot_instance=bot_instance,
-                    user_ids=users_to_ping,
-                    message=notification_message_content,
-                    channel_id=NOTIFICATION_CHANNEL_ID
-                )
-                future = asyncio.run_coroutine_threadsafe(
-                    coro, bot_instance.loop)
-                try:
-                    future.result(timeout=10)
-                    logger.info(
-                        f"Discord notification for {series_title} S{season_number:02d}E{episode_number:02d} completed.")
-                except asyncio.TimeoutError:
-                    logger.error(
-                        f"Sending Discord notification for {series_title} S{season_number:02d}E{episode_number:02d} timed out.")
-                except Exception as e:
-                    logger.error(
-                        f"Error running Download/Import Discord notification via threadsafe call: {e}", exc_info=True)
-            else:
+            future = asyncio.run_coroutine_threadsafe(coro, bot_instance.loop)
+            try:
+                future.result(timeout=10)
                 logger.info(
-                    f"No users to ping and no notification channel ID for {series_title} S{season_number:02d}E{episode_number:02d}. No Discord notification sent.")
+                    f"Discord embed notification for {embed_title} sent successfully.")
+            except asyncio.TimeoutError:
+                logger.error(
+                    f"Sending Discord embed notification for {embed_title} timed out.")
+            except Exception as e:
+                logger.error(
+                    f"Error running Download/Import Discord embed notification: {e}", exc_info=True)
+        else:
+            logger.info(
+                f"No users to ping and no notification channel ID for {embed_title}. No Discord notification sent.")
 
         return jsonify({"status": "success", "message": "Webhook processed"}), 200
 
