@@ -1,8 +1,10 @@
 from realdebrid_functions import realdebrid_status_command
 from realdebrid_functions import check_premium_expiry as realdebrid_check_premium_expiry_task
 from docker_functions import (
-    restart_all_containers, restart_containers_logic, restart_plex_command,
-    _get_docker_client  # Import the helper to be passed around
+    restart_containers_logic,  # This is the core logic function
+    restart_plex_command,
+    restart_containers_command,  # This function uses RESTART_ORDER
+    plex_status_command  # Don't forget to import this for the /plex_status command
 )
 from media_watcher_service import setup_media_watcher_service
 import os
@@ -15,19 +17,14 @@ from datetime import datetime, timedelta
 import requests
 
 # Import the shared utility function to load configuration
-from utils import load_config, load_dotenv  # Import load_dotenv from utils
+from utils import load_config, load_dotenv
 
 # --- Initial Environment Variable Loading ---
-# Load environment variables from .env file immediately.
-# This MUST happen before trying to read LOG_LEVEL from os.getenv().
 load_dotenv()
 
 # --- Logging Setup (EARLY AND PRIMARY CONFIGURATION) ---
-# 1. Get the desired log level from the LOG_LEVEL environment variable directly,
-#    defaulting to 'INFO' if not found.
 configured_log_level_str = os.getenv('LOG_LEVEL', 'INFO').upper()
 
-# 2. Map the string level to a logging constant
 LOGGING_LEVELS = {
     "DEBUG": logging.DEBUG,
     "INFO": logging.INFO,
@@ -36,76 +33,61 @@ LOGGING_LEVELS = {
     "CRITICAL": logging.CRITICAL
 }
 
-# 3. Get the actual logging level constant. Use INFO as a fallback for invalid strings.
 numeric_level = LOGGING_LEVELS.get(configured_log_level_str, logging.INFO)
 
-# 4. Apply basic logging configuration
-#    This will affect all loggers that don't have their own specific level set.
 logging.basicConfig(
     level=numeric_level,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.StreamHandler()  # Logs to console (stderr by default)
+        logging.StreamHandler()
     ]
 )
 
-# 5. Set discord.py's internal logging level to match if desired
-#    This is important for seeing discord.client and discord.gateway messages at your desired level.
-#    Only set discord.py logs to INFO if the overall level is INFO or DEBUG, otherwise keep at WARNING.
 if numeric_level <= logging.INFO:
     logging.getLogger('discord').setLevel(logging.INFO)
-    logging.getLogger('discord.http').setLevel(
-        logging.INFO)  # For detailed HTTP requests/responses
+    logging.getLogger('discord.http').setLevel(logging.INFO)
 else:
     logging.getLogger('discord').setLevel(logging.WARNING)
     logging.getLogger('discord.http').setLevel(logging.WARNING)
 
-logging.getLogger('asyncio').setLevel(
-    logging.WARNING)  # Reduce asyncio verbosity
-logging.getLogger('requests').setLevel(
-    logging.WARNING)  # Reduce requests verbosity
-# For Flask server logs, often very verbose
+logging.getLogger('asyncio').setLevel(logging.WARNING)
+logging.getLogger('requests').setLevel(logging.WARNING)
 logging.getLogger('werkzeug').setLevel(logging.WARNING)
 
-# Now that logging is configured, we can safely get a logger for this module
 logger = logging.getLogger(__name__)
 logger.info(f"Main bot logging level set to: {configured_log_level_str}")
 
 
 # Import the media watcher service setup function
 
-# Import docker library for Docker interaction (ensure 'docker' is in requirements.txt)
+# Import docker library for Docker interaction
 try:
     import docker
 except ImportError:
     logger.error(
         "The 'docker' library is not installed. Docker commands will not work.", exc_info=True)
-    docker = None  # Set to None so we can check if it's available
+    docker = None
 
 
 # --- Configuration Loading ---
 CONFIG_FILE = "config.json"
 config = {}
 try:
-    # utils.load_config will now use the already loaded environment variables via load_dotenv()
     config = load_config(CONFIG_FILE)
     logger.info("Configuration loaded successfully.")
 except (FileNotFoundError, json.JSONDecodeError) as e:
     logger.critical(
         f"Error loading configuration from '{CONFIG_FILE}': {e}. Exiting.", exc_info=True)
-    exit(1)  # Exit if essential config cannot be loaded
+    exit(1)
 
 # --- Extract configurations from the loaded config ---
-# Use .get() with a default value to prevent KeyError if the key is missing
-DISCORD_TOKEN = config.get("discord_token", os.getenv(
-    "DISCORD_TOKEN"))  # Fallback to ENV if not in config
-REALDEBRID_API_KEY = config.get("realdebrid_api_key", os.getenv(
-    "REALDEBRID_API_KEY"))  # Fallback to ENV
+DISCORD_TOKEN = config.get("discord_token", os.getenv("DISCORD_TOKEN"))
+REALDEBRID_API_KEY = config.get(
+    "realdebrid_api_key", os.getenv("REALDEBRID_API_KEY"))
 CHANNEL_ID = config["discord"].get("notification_channel_id")
 CHANNEL_ID_INT = int(
     CHANNEL_ID) if CHANNEL_ID and CHANNEL_ID.isdigit() else None
 
-# Docker details from config or environment
 DOCKER_SERVER_IP = config.get("docker", {}).get(
     "server_ip", os.getenv("DOCKER_SERVER_IP"))
 DOCKER_SERVER_USER = config.get("docker", {}).get(
@@ -115,30 +97,29 @@ DOCKER_SERVER_PASSWORD = config.get("docker", {}).get(
 CONTAINER_NAMES = config.get("docker", {}).get("container_names", [])
 RESTART_ORDER = config.get("docker", {}).get("restart_order", [])
 
-# Ensure container names and restart order are lists
 if isinstance(CONTAINER_NAMES, str):
     CONTAINER_NAMES = [name.strip() for name in CONTAINER_NAMES.split(',')]
 if isinstance(RESTART_ORDER, str):
     RESTART_ORDER = [name.strip() for name in RESTART_ORDER.split(',')]
 
 
-# Import commands from other files AFTER environment variables are loaded by load_dotenv()
-# This ensures they pick up DOCKER_SERVER_IP etc. if they read from os.environ directly.
+# Import commands from other files
+# Removed 'restart_all_containers' which was causing the ImportError
+
 
 # --- Discord Bot Setup ---
 intents = discord.Intents.default()
-# Required for message content (e.g., if prefix commands were used)
 intents.message_content = True
-# Ensure this is enabled if you need to fetch member data, e.g., for DMs
 intents.members = True
-# Changed prefix from '/' to '!' to avoid conflict with slash commands
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # --- Register Commands ---
 # Register your slash commands
-bot.tree.add_command(restart_all_containers)
+# Corresponds to /restart_containers in docker_functions.py
+bot.tree.add_command(restart_containers_command)
 bot.tree.add_command(restart_plex_command)
 bot.tree.add_command(realdebrid_status_command)
+bot.tree.add_command(plex_status_command)  # Register the /plex_status command
 
 # --- Bot Events ---
 
@@ -147,10 +128,9 @@ bot.tree.add_command(realdebrid_status_command)
 async def on_ready():
     """Event that fires when the bot is ready."""
     logger.info(f"Logged in as {bot.user} (ID: {bot.user.id})")
-    await bot.tree.sync()  # Sync slash commands globally
+    await bot.tree.sync()
     logger.info("Synced commands globally.")
 
-    # Get the startup channel if configured
     startup_channel = bot.get_channel(CHANNEL_ID_INT)
     if startup_channel:
         try:
@@ -167,17 +147,12 @@ async def on_ready():
         logger.warning(
             f"Could not find startup channel with ID: {CHANNEL_ID_INT} or ID was not provided in config.json.")
 
-    # Start the Real-Debrid background task
     if not realdebrid_check_premium_expiry_task.is_running():
-        # Pass the bot instance and the channel ID to the task
         realdebrid_check_premium_expiry_task.start(bot, CHANNEL_ID_INT)
         logger.info("Real-Debrid premium expiry check task started.")
 
-    # --- NEW: Setup Media Watcher Service ---
-    # Pass the bot instance and the shared config for the service
     await setup_media_watcher_service(bot)
     logger.info("Media Watcher Service setup initiated.")
-    # --- END NEW ---
 
 
 @bot.event
@@ -185,9 +160,8 @@ async def on_close():
     """Event that fires when the bot is closing."""
     logger.info("Bot is shutting down.")
     if realdebrid_check_premium_expiry_task.is_running():
-        realdebrid_check_premium_expiry_task.cancel()  # Cancel the Real-Debrid task
+        realdebrid_check_premium_expiry_task.cancel()
         logger.info("Real-Debrid premium expiry check task cancelled.")
-    # The Flask server thread (if daemon) will exit with the main program.
 
 # --- Main Entry Point ---
 if __name__ == "__main__":

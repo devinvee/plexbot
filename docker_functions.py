@@ -219,6 +219,38 @@ async def restart_containers_logic(container_list):
             await asyncio.to_thread(ssh.close)
 
 
+@discord.app_commands.command(name="restart_all_containers", description="Restart ALL configured Docker containers.")
+async def restart_all_containers(interaction: discord.Interaction):
+    """Restart all Docker containers listed in CONTAINER_NAMES."""
+    logger.info(
+        # Info level
+        f"Docker: Received /restart_all_containers command from user {interaction.user.id}.")
+    await interaction.response.defer()  # Defer the response
+
+    if not CONTAINER_NAMES:
+        # Warning level
+        logger.warning(
+            "Docker: CONTAINER_NAMES is empty. No containers to restart for /restart_all_containers command.")
+        await interaction.followup.send("No Docker containers configured in `CONTAINER_NAMES` environment variable to restart.")
+        return
+
+    await interaction.followup.send(f"Initiating restart sequence for ALL configured containers: {', '.join(CONTAINER_NAMES)}...")
+
+    # Use CONTAINER_NAMES here
+    success = await restart_containers_logic(CONTAINER_NAMES)
+
+    if success:
+        # Info level
+        logger.info(
+            f"Docker: Successfully restarted all containers in CONTAINER_NAMES.")
+        await interaction.followup.send("All configured containers have been restarted and are healthy! Enjoy! 🎉")
+    else:
+        # Error level
+        logger.error(
+            f"Docker: Failed to restart one or more containers in CONTAINER_NAMES.")
+        await interaction.followup.send("Failed to restart one or more containers. Check bot logs for details. ❌")
+
+
 def check_docker_containers_sync():
     """Synchronous function to check container statuses for commands.
     This function blocks the event loop, so it's run via asyncio.to_thread.
