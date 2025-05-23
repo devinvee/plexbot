@@ -367,6 +367,7 @@ async def on_ready():
         startup_channel = bot.get_channel(CHANNEL_ID_INT)
 
     if startup_channel:
+        continue
         # await startup_channel.send("👋 Bot is online and ready!")
         # You might add a call here to send initial Real-Debrid status if desired
         # await send_realdebrid_startup_status(startup_channel) # (Requires defining send_realdebrid_startup_status)
