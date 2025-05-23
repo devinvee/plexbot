@@ -28,6 +28,8 @@ CONFIG_FILE = "config.json"
 config = {}
 try:
     config = load_config(CONFIG_FILE)
+    print(
+        f"DEBUG: Raw log_level from config object: {config.get('log_level')}")
     # This initial log will still use default logging.basicConfig level (INFO by default)
     logging.info("Configuration loaded successfully.")
 except (FileNotFoundError, json.JSONDecodeError) as e:
