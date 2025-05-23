@@ -1,5 +1,14 @@
+from realdebrid_functions import realdebrid_status_command
+from realdebrid_functions import check_premium_expiry as realdebrid_check_premium_expiry_task
+from docker_functions import (
+    restart_containers_logic,  # This is the core logic function
+    restart_plex_command,
+    restart_containers_command,  # This function uses RESTART_ORDER
+    plex_status_command  # Don't forget to import this for the /plex_status command
+)
+from media_watcher_service import setup_media_watcher_service
 import os
-import logging
+import logging  # Make sure logging is imported
 import asyncio
 import json
 import discord
@@ -10,33 +19,94 @@ import requests
 # Import the shared utility function to load configuration
 from utils import load_config, load_dotenv
 
-# Import the media watcher service setup function
-from media_watcher_service import setup_media_watcher_service
-
+# --- Initial Environment Variable Loading ---
 load_dotenv()
+# DEBUG LINE 1
+print(
+    f"Value of LOG_LEVEL from os.getenv after load_dotenv(): '{os.getenv('LOG_LEVEL')}'")
+
+# --- Logging Setup (EARLY AND PRIMARY CONFIGURATION) ---
+configured_log_level_str = os.getenv('LOG_LEVEL', 'INFO').upper()
+# DEBUG LINE 2
+print(
+    f"Configured log level string for basicConfig: '{configured_log_level_str}'")
+
+LOGGING_LEVELS = {
+    "DEBUG": logging.DEBUG,
+    "INFO": logging.INFO,
+    "WARNING": logging.WARNING,
+    "ERROR": logging.ERROR,
+    "CRITICAL": logging.CRITICAL
+}
+
+numeric_level = LOGGING_LEVELS.get(configured_log_level_str, logging.INFO)
+# DEBUG LINE 3
+print(
+    f"Numeric log level for basicConfig: {numeric_level} (DEBUG is {logging.DEBUG}, INFO is {logging.INFO})")
+
+logging.basicConfig(
+    level=numeric_level,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler()
+    ]
+)
+# Test if DEBUG logs from the root logger work
+# DEBUG LINE 4
+logging.debug("This is a DEBUG message from root logger after basicConfig.")
+# DEBUG LINE 5
+logging.info("This is an INFO message from root logger after basicConfig.")
 
 
-# Import docker library for Docker interaction (ensure 'docker' is in requirements.txt)
+# Configure Discord.py loggers (and others) AFTER basicConfig
+if numeric_level <= logging.INFO:  # This logic might need adjustment based on desired verbosity
+    logging.getLogger('discord').setLevel(logging.INFO)
+    logging.getLogger('discord.http').setLevel(logging.INFO)
+else:
+    logging.getLogger('discord').setLevel(logging.WARNING)
+    logging.getLogger('discord.http').setLevel(logging.WARNING)
+
+logging.getLogger('asyncio').setLevel(logging.WARNING)
+logging.getLogger('requests').setLevel(logging.WARNING)
+logging.getLogger('werkzeug').setLevel(logging.WARNING)
+
+# Get your module-specific logger AFTER basicConfig
+logger = logging.getLogger(__name__)  # This is the logger for bot.py
+# DEBUG LINE 6
+logger.debug(f"This is a DEBUG message from the __main__ logger (bot.py).")
+# This was your original line, good for confirmation
+logger.info(f"Main bot logging level set to: {configured_log_level_str}")
+
+
+# Import the media watcher service setup function
+# (already done at the top)
+
+# Import docker library for Docker interaction
 try:
     import docker
 except ImportError:
-    # This initial error logging will use Python's default logging behavior
-    # which is usually INFO or WARNING level to console.
-    logging.error(
-        "The 'docker' library is not installed. Docker commands will not work.")
-    docker = None  # Set to None so we can check if it's available
+    logger.error(  # logger here will now respect the numeric_level set above
+        "The 'docker' library is not installed. Docker commands will not work.", exc_info=True)
+    docker = None
+
 
 # --- Configuration Loading ---
 CONFIG_FILE = "config.json"
 config = {}
 try:
     config = load_config(CONFIG_FILE)
-    # This initial log will still use default logging.basicConfig level (INFO by default)
-    logging.info("Configuration loaded successfully.")
+    # You could add a debug log from 'logger' here to see if config loaded,
+    # e.g., logger.debug(f"Config loaded: {config}")
+    # This logger also respects the numeric_level
+    logger.info("Configuration loaded successfully.")
 except (FileNotFoundError, json.JSONDecodeError) as e:
-    logging.error(
-        f"Error loading configuration from '{CONFIG_FILE}': {e}. Exiting.")
-    exit(1)  # Exit if essential config cannot be loaded
+    # logger.critical will also respect the level. If level is INFO, critical will still show.
+    logger.critical(
+        f"Error loading configuration from '{CONFIG_FILE}': {e}. Exiting.", exc_info=True)
+    exit(1)
+
+# --- Extract configurations from the loaded config ---
+# ... (rest of your bot.py code)
 
 # --- Logging Setup (MOVED AND MODIFIED) ---
 # 1. Get the desired log level from config.json, defaulting to INFO if not found
