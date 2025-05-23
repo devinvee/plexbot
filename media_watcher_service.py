@@ -209,44 +209,57 @@ async def send_discord_notification(bot_instance, user_ids: set, message: str, c
 # --- Webhook Endpoints ---
 
 
+# Add near the top of media_watcher_service.py if not already there
+
+# ... (other parts of your media_watcher_service.py file) ...
+
+
 @app.route('/webhook/sonarr', methods=['POST'])
-async def sonarr_webhook():
+async def sonarr_webhook():  # Flask 2.0+ allows async route handlers
     payload = request.json
     logger.info(
         f"Received Sonarr webhook: {payload.get('eventType')} from {request.remote_addr}")
     logger.debug(f"Sonarr webhook payload: {json.dumps(payload, indent=2)}")
 
     event_type = payload.get('eventType')
+    bot_instance = app.config.get('discord_bot')  # Get the bot instance
+
+    if not bot_instance:
+        logger.error(
+            "Discord bot instance not found in Flask app config. Cannot process webhook.")
+        return jsonify({"status": "error", "message": "Bot instance not configured"}), 500
 
     if event_type == "Test":
-        logger.info("Sonarr Test webhook received and processed successfully!")
-
+        logger.info(
+            "Sonarr Test webhook received. Attempting to send Discord notification.")
         test_notification_message = "Sonarr webhook test successful! Connectivity is confirmed."
 
-        # Check if bot instance and channel ID are available before sending notification
-        if 'discord_bot' in app.config and NOTIFICATION_CHANNEL_ID:
+        if NOTIFICATION_CHANNEL_ID:
+            # Create a coroutine object for the notification
+            coro = send_discord_notification(
+                bot_instance=bot_instance,
+                user_ids=set(),
+                message=test_notification_message,
+                channel_id=NOTIFICATION_CHANNEL_ID
+            )
+            # Schedule it on the bot's event loop from this (Flask) thread
+            future = asyncio.run_coroutine_threadsafe(coro, bot_instance.loop)
             try:
-                # For a test notification, user_ids can be an empty set.
-                await send_discord_notification(
-                    bot_instance=app.config['discord_bot'],
-                    user_ids=set(),  # Pass an empty set for user_ids
-                    message=test_notification_message,
-                    channel_id=NOTIFICATION_CHANNEL_ID
-                )
-                logger.info("Discord notification sent for Sonarr Test.")
+                # Optionally wait for the result with a timeout
+                future.result(timeout=10)  # e.g., 10 seconds
+                logger.info("Discord notification for Sonarr Test completed.")
+            except asyncio.TimeoutError:
+                logger.error(
+                    "Sending Discord notification for Sonarr Test timed out.")
             except Exception as e:
                 logger.error(
-                    f"Error sending Discord notification for Sonarr Test: {e}")
-        elif not ('discord_bot' in app.config):
-            logger.warning(
-                "Discord bot instance not available; cannot send Sonarr Test notification.")
-        elif not NOTIFICATION_CHANNEL_ID:
+                    f"Error running Sonarr Test Discord notification via threadsafe call: {e}", exc_info=True)
+        else:
             logger.warning(
                 "Discord notification_channel_id not set; cannot send Sonarr Test notification.")
 
-        return jsonify({"status": "success", "message": "Test webhook processed successfully"}), 200
+        return jsonify({"status": "success", "message": "Test webhook processed"}), 200
 
-    # Note: Sonarr v3 uses "Download", v4 might use "Grab" for pre-import and "EpisodeImported" #
     elif event_type in ['Download', 'Episode Imported']:
         series = payload.get('series', {})
         episodes = payload.get('episodes', [])
@@ -263,10 +276,9 @@ async def sonarr_webhook():
 
         users_to_ping = get_discord_user_ids_for_tags(series_tags)
 
-        if not users_to_ping and event_type in ['Download', 'Episode Imported']:
-            logger.info(
-                f"No users found for Sonarr event tags: {series_tags} for series '{series_title}'. No notification sent.")
-            return jsonify({"status": "no_users_matched", "message": "No users mapped to these tags, so no notification sent."}), 200
+        # Construct the full notification message once
+        # (This part seems fine, assuming the loop for episodes doesn't change the core message structure much,
+        # but rather the details like episode title, number)
 
         for episode in episodes:
             episode_id = episode.get('id')
@@ -285,30 +297,39 @@ async def sonarr_webhook():
             NOTIFIED_EPISODES_CACHE.append(episode_unique_id)
 
             mentions = " ".join([f"<@{uid}>" for uid in users_to_ping])
-            notification_message = (
+            notification_message_content = (
                 f"🎉 {mentions} **New Episode Available!** 🎉\n"
                 f"**Series:** {series_title}\n"
                 f"**Episode:** S{season_number:02d}E{episode_number:02d} - {episode_title}\n"
                 f"It's now available for streaming!"
             )
 
-            if 'discord_bot' in app.config:
-                await send_discord_notification(
-                    app.config['discord_bot'],
-                    users_to_ping,
-                    notification_message,
-                    NOTIFICATION_CHANNEL_ID
+            if users_to_ping or NOTIFICATION_CHANNEL_ID:  # Send if there's someone to DM or a channel to post in
+                coro = send_discord_notification(
+                    bot_instance=bot_instance,
+                    user_ids=users_to_ping,
+                    message=notification_message_content,
+                    channel_id=NOTIFICATION_CHANNEL_ID
                 )
-                logger.info(
-                    f"Notification sent for {series_title} S{season_number:02d}E{episode_number:02d} to {len(users_to_ping)} users.")
+                future = asyncio.run_coroutine_threadsafe(
+                    coro, bot_instance.loop)
+                try:
+                    future.result(timeout=10)
+                    logger.info(
+                        f"Discord notification for {series_title} S{season_number:02d}E{episode_number:02d} completed.")
+                except asyncio.TimeoutError:
+                    logger.error(
+                        f"Sending Discord notification for {series_title} S{season_number:02d}E{episode_number:02d} timed out.")
+                except Exception as e:
+                    logger.error(
+                        f"Error running Download/Import Discord notification via threadsafe call: {e}", exc_info=True)
             else:
-                logger.error(
-                    "Discord bot instance not found in Flask app config. Cannot send notifications for Download/Import.")
+                logger.info(
+                    f"No users to ping and no notification channel ID for {series_title} S{season_number:02d}E{episode_number:02d}. No Discord notification sent.")
 
         return jsonify({"status": "success", "message": "Webhook processed"}), 200
 
     else:
-        # For any other event_type not explicitly handled above
         logger.info(
             f"Sonarr event type '{event_type}' is not explicitly handled. Ignoring.")
         return jsonify({"status": "ignored", "message": f"Event type '{event_type}' not handled"}), 200
