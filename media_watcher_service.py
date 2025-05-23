@@ -82,9 +82,6 @@ async def fetch_overseerr_users():
 
         logger.info(
             f"Overseerr API Response Status Code: {response.status_code}")
-        logger.debug(f"Overseerr API Response Headers: {response.headers}")
-        logger.debug(
-            f"Overseerr API Raw Response Text (first 500 chars): {response.text[:500]}...")
 
         response.raise_for_status()
         parsed_data = None
@@ -301,7 +298,6 @@ def run_webhook_server(bot_instance):
     app.config['discord_bot'] = bot_instance  # Pass bot instance for sending notifications
 
     logger.info("Flask server attempting to start on host 0.0.0.0 port 5000...")
-    # debug=False for production
     app.run(host='0.0.0.0', port=5000, debug=False)
     # This line might not be reached if app.run blocks indefinitely
     logger.info("Flask server stopped.")
