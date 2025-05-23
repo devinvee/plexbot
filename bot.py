@@ -28,18 +28,23 @@ CONFIG_FILE = "config.json"
 config = {}
 try:
     config = load_config(CONFIG_FILE)
+    # This print confirmed "DEBUG" is loaded into the config object
     print(
-        f"DEBUG: Raw log_level from config object: {config.get('log_level')}")
-    # This initial log will still use default logging.basicConfig level (INFO by default)
-    logging.info("Configuration loaded successfully.")
+        f"DIAGNOSTIC STEP 0: Raw log_level from config object: {config.get('log_level')}")
 except (FileNotFoundError, json.JSONDecodeError) as e:
+    # This log will use Python's default (or any pre-existing) logger settings.
     logging.error(
         f"Error loading configuration from '{CONFIG_FILE}': {e}. Exiting.")
-    exit(1)  # Exit if essential config cannot be loaded
+    exit(1)
 
 # --- Logging Setup (MOVED AND MODIFIED) ---
 # 1. Get the desired log level from config.json, defaulting to INFO if not found
+print(
+    f"DIAGNOSTIC STEP 1: Root logger handlers BEFORE bot.py basicConfig: {logging.root.handlers}")
 configured_log_level_str = config.get("log_level", "INFO").upper()
+print(
+    f"DIAGNOSTIC STEP 2: configured_log_level_str = '{configured_log_level_str}'")
+
 
 # 2. Map the string level to a logging constant
 LOGGING_LEVELS = {
@@ -49,48 +54,54 @@ LOGGING_LEVELS = {
     "ERROR": logging.ERROR,
     "CRITICAL": logging.CRITICAL
 }
+log_level_from_dict = LOGGING_LEVELS.get(configured_log_level_str)
+print(
+    f"DIAGNOSTIC STEP 3: Value from LOGGING_LEVELS dict for '{configured_log_level_str}': {log_level_from_dict} (Numeric name: {logging.getLevelName(log_level_from_dict) if log_level_from_dict is not None else 'None'})")
+
 
 # 3. Get the actual logging level constant. Use INFO as a fallback for invalid strings.
 log_level = LOGGING_LEVELS.get(configured_log_level_str, logging.INFO)
+print(
+    f"DIAGNOSTIC STEP 4: Final 'log_level' variable for basicConfig: {log_level} (Numeric name: {logging.getLevelName(log_level)})")
 
 # 4. Re-configure the basic logger with the dynamic level
 # We re-run basicConfig here, which effectively updates the root logger's level.
 # It's important to do this *after* config is loaded.
+# Attempt to force configuration (Python 3.8+)
+# If you are on Python < 3.8, force=True will cause an error. Remove it if so.
 logging.basicConfig(
-    level=log_level,  # Use the configured log level here
+    level=log_level,  # Use the configured log level here #
     format='%(asctime)s %(levelname)-8s %(name)-15s %(message)s',
     # Ensure it still outputs to stdout for Docker logs
-    handlers=[logging.StreamHandler()]
+    handlers=[logging.StreamHandler()],
+    force=True  # Add this to ensure reconfiguration
 )
+print(
+    f"DIAGNOSTIC STEP 5: Root logger handlers AFTER bot.py basicConfig: {logging.root.handlers}")
 
+
+# CRITICAL Diagnostic Log
 root_logger = logging.getLogger()
 effective_level_numeric = root_logger.getEffectiveLevel()
 effective_level_name = logging.getLevelName(effective_level_numeric)
-
-# Log this information using a high-priority level like CRITICAL or ERROR
-# so it's almost guaranteed to show up regardless of the configured level.
-# Or use WARNING/INFO if you prefer.
 logging.critical(
     f"LOGGING SERVICE: Root logger initialized. Effective log level set to: {effective_level_name} (Numeric: {effective_level_numeric})")
-# You can also add a test debug message here:
 logging.debug(
-    "LOGGING SERVICE: This is a test DEBUG message from bot.py after logging setup.")
-# And a test info message:
+    "LOGGING SERVICE: This is a test DEBUG message after logging setup.")
 logging.info(
-    "LOGGING SERVICE: This is a test INFO message from bot.py after logging setup.")
+    "LOGGING SERVICE: This is a test INFO message after logging setup.")
+
 
 # 5. Set specific log levels for chatty libraries.
 # You can make discord.py logs INFO or DEBUG if your main log_level is DEBUG,
 # otherwise keep them at WARNING to avoid excessive output.
-if log_level <= logging.INFO:  # If your root logger is INFO or DEBUG
+if log_level <= logging.INFO:
     logging.getLogger('discord').setLevel(logging.INFO)
-else:  # If your root logger is WARNING, ERROR, or CRITICAL
+else:
     logging.getLogger('discord').setLevel(logging.WARNING)
 
-logging.getLogger('asyncio').setLevel(
-    logging.WARNING)  # Reduce asyncio verbosity
-logging.getLogger('requests').setLevel(
-    logging.WARNING)  # Reduce requests verbosity
+logging.getLogger('asyncio').setLevel(logging.WARNING)
+logging.getLogger('requests').setLevel(logging.WARNING)
 # For Flask server logs, often very verbose
 logging.getLogger('werkzeug').setLevel(logging.WARNING)
 # --- END LOGGING SETUP ---
