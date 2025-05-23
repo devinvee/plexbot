@@ -15,48 +15,21 @@ from utils import load_config
 CONFIG_FILE = "config.json"
 config = {}  # Initialize config
 try:
+    # This will use the environment variables already loaded by bot.py via utils.load_dotenv()
     config = load_config(CONFIG_FILE)
-    # This initial log will still use Python's default logging level (INFO by default)
-    logging.info("Configuration loaded successfully in media_watcher_service.")
+    # This log will now respect the logging configuration set up in bot.py
+    # because the logger is obtained *after* basicConfig has run in bot.py.
+    # We delay getting the logger until after this initial config load for clarity.
 except (FileNotFoundError, json.JSONDecodeError) as e:
     logging.error(f"Error loading configuration in media_watcher_service: {e}")
     exit(1)  # Exit if essential config cannot be loaded
 
 # --- Logging Setup for this module ---
-# 1. Get the desired log level from config.json, defaulting to INFO if not found
-configured_log_level_str = config.get("log_level", "INFO").upper()
-
-# 2. Map the string level to a logging constant
-LOGGING_LEVELS = {
-    "DEBUG": logging.DEBUG,
-    "INFO": logging.INFO,
-    "WARNING": logging.WARNING,
-    "ERROR": logging.ERROR,
-    "CRITICAL": logging.CRITICAL
-}
-
-# 3. Get the actual logging level constant. Use INFO as a fallback for invalid strings.
-log_level = LOGGING_LEVELS.get(configured_log_level_str, logging.INFO)
-
-# 4. Re-configure the basic logger with the dynamic level
-# It's important to do this *after* config is loaded.
-# Note: Since main.py already calls basicConfig, this will re-configure the root logger.
-# This is generally fine if both modules use the same config.
-logging.basicConfig(
-    level=log_level,  # Use the configured log level here
-    format='%(asctime)s %(levelname)-8s %(name)-15s %(message)s',
-    # Ensure it still outputs to stdout for Docker logs
-    handlers=[logging.StreamHandler()]
-)
-
-# 5. Set specific log levels for chatty libraries used by this module.
-# Keep consistent with main.py for `requests` and add `werkzeug` for Flask.
-logging.getLogger('requests').setLevel(
-    logging.WARNING)  # Reduce requests verbosity
-# For Flask server logs, often very verbose
-logging.getLogger('werkzeug').setLevel(logging.WARNING)
-
-# --- END Logging Setup ---
+# Just get a named logger. The overall level will be set by bot.py's basicConfig.
+# Remove the redundant basicConfig call here, as bot.py already handles the root logger.
+logger = logging.getLogger(__name__)
+# This will now respect the main log level
+logger.info("Media Watcher Service module initialized.")
 
 # Ensure required config sections exist
 DISCORD_CONFIG = config.get("discord", {})
@@ -68,7 +41,7 @@ NOTIFICATION_CHANNEL_ID = DISCORD_CONFIG.get("notification_channel_id")
 DM_NOTIFICATIONS_ENABLED = DISCORD_CONFIG.get("dm_notifications_enabled", True)
 
 if not NOTIFICATION_CHANNEL_ID:
-    logging.warning(
+    logger.warning(
         "Discord notification_channel_id not set in config.json. Only DMs (if enabled) will work.")
 
 # --- Global State for User Data and De-duplication ---
@@ -88,12 +61,11 @@ def normalize_plex_username(username: str) -> str:
 async def fetch_overseerr_users():
     """Fetches users from Overseerr API and populates OVERSEERR_USERS_DATA."""
     if not OVERSEERR_CONFIG.get("base_url") or not OVERSEERR_CONFIG.get("api_key"):
-        logging.warning("Overseerr API config missing. Skipping user sync.")
+        logger.warning("Overseerr API config missing. Skipping user sync.")
         return
 
     url = f"{OVERSEERR_CONFIG['base_url'].rstrip('/')}/api/v1/user"
-    # Info level
-    logging.info(f"Attempting to fetch Overseerr users from: {url}")
+    logger.info(f"Attempting to fetch Overseerr users from: {url}")
 
     headers = {
         "X-Api-Key": OVERSEERR_CONFIG['api_key'], "Accept": "application/json"}
@@ -101,13 +73,10 @@ async def fetch_overseerr_users():
     try:
         response = await asyncio.to_thread(requests.get, url, headers=headers, timeout=15)
 
-        # Info level
-        logging.info(
+        logger.info(
             f"Overseerr API Response Status Code: {response.status_code}")
-        # Debug level
-        logging.debug(f"Overseerr API Response Headers: {response.headers}")
-        # Debug level
-        logging.debug(
+        logger.debug(f"Overseerr API Response Headers: {response.headers}")
+        logger.debug(
             f"Overseerr API Raw Response Text (first 500 chars): {response.text[:500]}...")
 
         response.raise_for_status()
@@ -116,44 +85,36 @@ async def fetch_overseerr_users():
 
         try:
             parsed_data = response.json()
-            # Info level
-            logging.info("Successfully parsed Overseerr API response as JSON.")
-            # Debug level
-            logging.debug(f"Type of parsed data object: {type(parsed_data)}")
-            logging.debug(f"Content of parsed data (pageInfo & first 2 results): "
-                          f"pageInfo={parsed_data.get('pageInfo')}, "
-                          # Debug level
-                          f"results (first 2)={parsed_data.get('results', [])[:2]}")
+            logger.info("Successfully parsed Overseerr API response as JSON.")
+            logger.debug(f"Type of parsed data object: {type(parsed_data)}")
+            logger.debug(f"Content of parsed data (pageInfo & first 2 results): "
+                         f"pageInfo={parsed_data.get('pageInfo')}, "
+                         f"results (first 2)={parsed_data.get('results', [])[:2]}")
 
         except requests.exceptions.JSONDecodeError as e:
-            # Error level
-            logging.error(
+            logger.error(
                 f"Failed to decode JSON response from Overseerr: {e}")
-            # Error level
-            logging.error(f"Full problematic response text: {response.text}")
+            logger.error(f"Full problematic response text: {response.text}")
             return
 
         users_list = parsed_data.get('results')
 
         if not isinstance(users_list, list):
-            # Error level
-            logging.error(
+            logger.error(
                 f"Overseerr API 'results' key did not contain a list. Got: {type(users_list)}. Cannot process users.")
             return
 
         OVERSEERR_USERS_DATA.clear()
         for user in users_list:
             if not isinstance(user, dict):
-                # Warning level
-                logging.warning(
+                logger.warning(
                     f"Skipping unexpected item in Overseerr users list. Expected dict, got {type(user)}: {user}")
                 continue
 
             plex_username = user.get('plexUsername')
 
             if plex_username is None:
-                # Warning level
-                logging.warning(
+                logger.warning(
                     f"User {user.get('displayName', user.get('email', user.get('id', 'Unknown')))} has no 'plexUsername'. Skipping for mapping.")
                 continue
 
@@ -165,23 +126,18 @@ async def fetch_overseerr_users():
                     "discord_id": discord_id,
                     "original_plex_username": plex_username
                 }
-        # Info level
-        logging.info(
+        logger.info(
             f"Successfully synced {len(OVERSEERR_USERS_DATA)} Overseerr users.")
 
     except requests.exceptions.HTTPError as e:
-        # Error level
-        logging.error(
+        logger.error(
             f"HTTP Error fetching Overseerr users (Status: {e.response.status_code}): {e}")
-        # Error level
-        logging.error(f"Response body for HTTP error: {e.response.text}")
+        logger.error(f"Response body for HTTP error: {e.response.text}")
     except requests.exceptions.RequestException as e:
-        # Error level
-        logging.error(
+        logger.error(
             f"Network or request error fetching Overseerr users: {e}")
     except Exception as e:
-        # Error level
-        logging.error(
+        logger.error(
             f"An unexpected error occurred during Overseerr user sync: {e}", exc_info=True)
 
 
@@ -200,16 +156,14 @@ def get_discord_user_ids_for_tags(media_tags: list) -> set:
                     users_to_notify.add(user_data["discord_id"])
                     break
 
-    # Debug level
-    logging.debug(f"Users to notify for tags {media_tags}: {users_to_notify}")
+    logger.debug(f"Users to notify for tags {media_tags}: {users_to_notify}")
     return users_to_notify
 
 
 async def send_discord_notification(bot_instance, user_ids: set, message: str, channel_id: str):
     """Sends a message to a channel and/or DMs users."""
     if not bot_instance:
-        # Error level
-        logging.error(
+        logger.error(
             "Discord bot instance not passed to send_discord_notification. Cannot send messages.")
         return
 
@@ -218,17 +172,14 @@ async def send_discord_notification(bot_instance, user_ids: set, message: str, c
             channel_id_int = int(channel_id)
             channel = bot_instance.get_channel(channel_id_int)
             if channel:
-                # Info level
-                logging.info(
+                logger.info(
                     f"Sending notification to channel {channel_id_int}.")
                 await channel.send(message)
             else:
-                # Warning level
-                logging.warning(
+                logger.warning(
                     f"Could not find notification channel with ID: {channel_id}")
         except ValueError:
-            # Error level
-            logging.error(
+            logger.error(
                 f"Invalid notification_channel_id: {channel_id}. Must be an integer.")
 
     if DM_NOTIFICATIONS_ENABLED:
@@ -236,25 +187,20 @@ async def send_discord_notification(bot_instance, user_ids: set, message: str, c
             try:
                 user_id_int = int(user_id_str)
                 user = await bot_instance.fetch_user(user_id_int)
-                # Info level
-                logging.info(
+                logger.info(
                     f"Attempting to DM user {user.name} ({user_id_int}).")
                 await user.send(message)
             except ValueError:
-                # Warning level
-                logging.warning(
+                logger.warning(
                     f"Discord user ID {user_id_str} is not a valid integer. Skipping DM.")
             except discord.NotFound:
-                # Warning level
-                logging.warning(
+                logger.warning(
                     f"Discord user with ID {user_id_str} not found.")
             except discord.Forbidden:
-                # Warning level
-                logging.warning(
+                logger.warning(
                     f"Could not DM user {user_id_str}. They might have DMs disabled.")
             except Exception as e:
-                # Error level
-                logging.error(f"Error sending DM to {user_id_str}: {e}")
+                logger.error(f"Error sending DM to {user_id_str}: {e}")
 
 # --- Webhook Endpoints ---
 
@@ -262,18 +208,14 @@ async def send_discord_notification(bot_instance, user_ids: set, message: str, c
 @app.route('/webhook/sonarr', methods=['POST'])
 async def sonarr_webhook():
     payload = request.json
-    # Log the full payload at DEBUG level, summary at INFO
-    # Info level
-    logging.info(
+    logger.info(
         f"Received Sonarr webhook: {payload.get('eventType')} from {request.remote_addr}")
-    # Debug level
-    logging.debug(f"Sonarr webhook payload: {json.dumps(payload, indent=2)}")
+    logger.debug(f"Sonarr webhook payload: {json.dumps(payload, indent=2)}")
 
     event_type = payload.get('eventType')
 
     if event_type not in ['Download', 'Episode Imported']:
-        # Info level
-        logging.info(
+        logger.info(
             f"Sonarr event type '{event_type}' not handled. Ignoring.")
         return jsonify({"status": "ignored", "message": f"Event type '{event_type}' not handled"}), 200
 
@@ -282,8 +224,7 @@ async def sonarr_webhook():
     release = payload.get('release', {})
 
     if not series or not episodes:
-        # Warning level
-        logging.warning(
+        logger.warning(
             "Sonarr webhook payload missing series or episodes data.")
         return jsonify({"status": "error", "message": "Missing series or episode data"}), 400
 
@@ -294,8 +235,7 @@ async def sonarr_webhook():
     users_to_ping = get_discord_user_ids_for_tags(series_tags)
 
     if not users_to_ping:
-        # Info level
-        logging.info(
+        logger.info(
             f"No users found for Sonarr event tags: {series_tags} for series '{series_title}'.")
         return jsonify({"status": "no_users_matched", "message": "No users mapped to these tags"}), 200
 
@@ -309,8 +249,7 @@ async def sonarr_webhook():
                              release.get('releaseTitle'))
 
         if episode_unique_id in NOTIFIED_EPISODES_CACHE:
-            # Info level
-            logging.info(
+            logger.info(
                 f"Episode {series_title} S{season_number:02d}E{episode_number:02d} (Release: {release.get('releaseTitle')}) already notified. Skipping.")
             continue
 
@@ -332,12 +271,10 @@ async def sonarr_webhook():
                 notification_message,
                 NOTIFICATION_CHANNEL_ID
             )
-            # Info level
-            logging.info(
+            logger.info(
                 f"Notification sent for {series_title} S{season_number:02d}E{episode_number:02d} to {len(users_to_ping)} users.")
         else:
-            # Error level
-            logging.error(
+            logger.error(
                 "Discord bot instance not found in Flask app config. Cannot send notifications.")
 
     return jsonify({"status": "success", "message": "Webhook processed"}), 200
@@ -350,8 +287,7 @@ async def start_overseerr_user_sync(bot_instance):
     while True:
         await fetch_overseerr_users()
         interval = OVERSEERR_CONFIG.get("refresh_interval_minutes", 60)
-        # Info level
-        logging.info(f"Next Overseerr user sync in {interval} minutes.")
+        logger.info(f"Next Overseerr user sync in {interval} minutes.")
         await asyncio.sleep(interval * 60)
 
 # --- Flask Server Startup ---
@@ -361,20 +297,18 @@ def run_webhook_server(bot_instance):
     """Starts the Flask server in a separate thread/process."""
     app.config['discord_bot'] = bot_instance
 
-    logging.info("Flask server attempting to start...")  # Info level
+    logger.info("Flask server attempting to start...")
     # Use 0.0.0.0 to listen on all interfaces within the Docker container
     # Port 5000 is common for Flask, ensure it's exposed in docker-compose.yml
-    # debug=False for production
+    # Changed debug to False for production
     app.run(host='0.0.0.0', port=5000, debug=False)
     # This might not be reached if app.run blocks forever
-    logging.info("Flask server stopped.")
-
-# This function will be called by bot.py
+    logger.info("Flask server stopped.")
 
 
 async def setup_media_watcher_service(bot_instance):
     """Sets up the media watcher service, including webhook server and sync task."""
-    logging.info("Setting up Media Watcher Service...")  # Info level
+    logger.info("Setting up Media Watcher Service...")
 
     # Initial sync
     await fetch_overseerr_users()
@@ -385,8 +319,7 @@ async def setup_media_watcher_service(bot_instance):
     # Start the Flask webhook server in a separate thread/process
     import threading
     thread = threading.Thread(target=run_webhook_server, args=(bot_instance,))
-    thread.daemon = True
+    thread.daemon = True  # Allows the thread to exit when the main program exits
     thread.start()
-    # Info level
-    logging.info(
+    logger.info(
         "Flask webhook server started in a separate thread on port 5000.")
