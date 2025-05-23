@@ -29,8 +29,6 @@ config = {}
 try:
     config = load_config(CONFIG_FILE)
     # This print confirmed "DEBUG" is loaded into the config object
-    print(
-        f"DIAGNOSTIC STEP 0: Raw log_level from config object: {config.get('log_level')}")
 except (FileNotFoundError, json.JSONDecodeError) as e:
     # This log will use Python's default (or any pre-existing) logger settings.
     logging.error(
@@ -39,11 +37,7 @@ except (FileNotFoundError, json.JSONDecodeError) as e:
 
 # --- Logging Setup (MOVED AND MODIFIED) ---
 # 1. Get the desired log level from config.json, defaulting to INFO if not found
-print(
-    f"DIAGNOSTIC STEP 1: Root logger handlers BEFORE bot.py basicConfig: {logging.root.handlers}")
 configured_log_level_str = config.get("log_level", "INFO").upper()
-print(
-    f"DIAGNOSTIC STEP 2: configured_log_level_str = '{configured_log_level_str}'")
 
 
 # 2. Map the string level to a logging constant
@@ -55,14 +49,10 @@ LOGGING_LEVELS = {
     "CRITICAL": logging.CRITICAL
 }
 log_level_from_dict = LOGGING_LEVELS.get(configured_log_level_str)
-print(
-    f"DIAGNOSTIC STEP 3: Value from LOGGING_LEVELS dict for '{configured_log_level_str}': {log_level_from_dict} (Numeric name: {logging.getLevelName(log_level_from_dict) if log_level_from_dict is not None else 'None'})")
 
 
 # 3. Get the actual logging level constant. Use INFO as a fallback for invalid strings.
 log_level = LOGGING_LEVELS.get(configured_log_level_str, logging.INFO)
-print(
-    f"DIAGNOSTIC STEP 4: Final 'log_level' variable for basicConfig: {log_level} (Numeric name: {logging.getLevelName(log_level)})")
 
 # 4. Re-configure the basic logger with the dynamic level
 # We re-run basicConfig here, which effectively updates the root logger's level.
@@ -76,8 +66,6 @@ logging.basicConfig(
     handlers=[logging.StreamHandler()],
     force=True  # Add this to ensure reconfiguration
 )
-print(
-    f"DIAGNOSTIC STEP 5: Root logger handlers AFTER bot.py basicConfig: {logging.root.handlers}")
 
 
 # CRITICAL Diagnostic Log

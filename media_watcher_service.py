@@ -91,10 +91,6 @@ async def fetch_overseerr_users():
         try:
             parsed_data = response.json()
             logger.info("Successfully parsed Overseerr API response as JSON.")
-            logger.debug(f"Type of parsed data object: {type(parsed_data)}")
-            logger.debug(f"Content of parsed data (pageInfo & first 2 results): "
-                         f"pageInfo={parsed_data.get('pageInfo')}, "
-                         f"results (first 2)={parsed_data.get('results', [])[:2]}")
 
         except requests.exceptions.JSONDecodeError as e:
             logger.error(
