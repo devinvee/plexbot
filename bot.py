@@ -61,6 +61,22 @@ logging.basicConfig(
     handlers=[logging.StreamHandler()]
 )
 
+root_logger = logging.getLogger()
+effective_level_numeric = root_logger.getEffectiveLevel()
+effective_level_name = logging.getLevelName(effective_level_numeric)
+
+# Log this information using a high-priority level like CRITICAL or ERROR
+# so it's almost guaranteed to show up regardless of the configured level.
+# Or use WARNING/INFO if you prefer.
+logging.critical(
+    f"LOGGING SERVICE: Root logger initialized. Effective log level set to: {effective_level_name} (Numeric: {effective_level_numeric})")
+# You can also add a test debug message here:
+logging.debug(
+    "LOGGING SERVICE: This is a test DEBUG message from bot.py after logging setup.")
+# And a test info message:
+logging.info(
+    "LOGGING SERVICE: This is a test INFO message from bot.py after logging setup.")
+
 # 5. Set specific log levels for chatty libraries.
 # You can make discord.py logs INFO or DEBUG if your main log_level is DEBUG,
 # otherwise keep them at WARNING to avoid excessive output.
@@ -103,6 +119,15 @@ if NOTIFICATION_CHANNEL_ID_FROM_CONFIG:
 else:
     logging.warning(
         "Discord notification_channel_id not set in config.json. Some bot functions may not work.")
+
+if log_level <= logging.INFO:
+    logging.getLogger('discord').setLevel(logging.INFO)
+else:
+    logging.getLogger('discord').setLevel(logging.WARNING)
+
+logging.getLogger('asyncio').setLevel(logging.WARNING)
+logging.getLogger('requests').setLevel(logging.WARNING)
+logging.getLogger('werkzeug').setLevel(logging.WARNING)
 
 # --- Discord Bot Setup ---
 intents = discord.Intents.default()
