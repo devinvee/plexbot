@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 # This module still needs to load the configuration for its own settings,
 # unrelated to the global logging level setup.
 CONFIG_FILE = "config.json"
-config = {}  # Initialize config
+config = {}  # Initialize config #
 try:
     config = load_config(CONFIG_FILE)
     # This log will use the logging configuration set up in bot.py
@@ -26,7 +26,7 @@ try:
 except (FileNotFoundError, json.JSONDecodeError) as e:
     logger.error(
         f"Error loading configuration in media_watcher_service: {e}. Exiting.")
-    exit(1)  # Exit if essential config cannot be loaded
+    exit(1)  # Exit if essential config cannot be loaded #
 # --- END Configuration Loading ---
 
 # --- Specific Logger Level Adjustments for this Module ---
@@ -82,12 +82,19 @@ async def fetch_overseerr_users():
 
         logger.info(
             f"Overseerr API Response Status Code: {response.status_code}")
+        logger.debug(f"Overseerr API Response Headers: {response.headers}")
+        logger.debug(
+            f"Overseerr API Raw Response Text (first 500 chars): {response.text[:500]}...")
 
         response.raise_for_status()
         parsed_data = None
         try:
             parsed_data = response.json()
             logger.info("Successfully parsed Overseerr API response as JSON.")
+            logger.debug(f"Type of parsed data object: {type(parsed_data)}")
+            logger.debug(f"Content of parsed data (pageInfo & first 2 results): "
+                         f"pageInfo={parsed_data.get('pageInfo')}, "
+                         f"results (first 2)={parsed_data.get('results', [])[:2]}")
 
         except requests.exceptions.JSONDecodeError as e:
             logger.error(
@@ -211,77 +218,104 @@ async def sonarr_webhook():
 
     event_type = payload.get('eventType')
 
-    # Assuming 'Test' was for initial setup. Consider 'Grab' as well.
-    if event_type not in ['Download', 'Episode Imported']:
-        logger.info(
-            f"Sonarr event type '{event_type}' not handled. Ignoring.")
-        return jsonify({"status": "ignored", "message": f"Event type '{event_type}' not handled"}), 200
+    if event_type == "Test":
+        logger.info("Sonarr Test webhook received and processed successfully!")
 
-    series = payload.get('series', {})
-    episodes = payload.get('episodes', [])
-    release = payload.get('release', {})  # For de-duplication
+        test_notification_message = "Sonarr webhook test successful! Connectivity is confirmed."
 
-    if not series or not episodes:
-        logger.warning(
-            "Sonarr webhook payload missing series or episodes data.")
-        return jsonify({"status": "error", "message": "Missing series or episode data"}), 400
+        # Check if bot instance and channel ID are available before sending notification
+        if 'discord_bot' in app.config and NOTIFICATION_CHANNEL_ID:
+            try:
+                # For a test notification, user_ids can be an empty set.
+                await send_discord_notification(
+                    bot_instance=app.config['discord_bot'],
+                    user_ids=set(),  # Pass an empty set for user_ids
+                    message=test_notification_message,
+                    channel_id=NOTIFICATION_CHANNEL_ID
+                )
+                logger.info("Discord notification sent for Sonarr Test.")
+            except Exception as e:
+                logger.error(
+                    f"Error sending Discord notification for Sonarr Test: {e}")
+        elif not ('discord_bot' in app.config):
+            logger.warning(
+                "Discord bot instance not available; cannot send Sonarr Test notification.")
+        elif not NOTIFICATION_CHANNEL_ID:
+            logger.warning(
+                "Discord notification_channel_id not set; cannot send Sonarr Test notification.")
 
-    series_title = series.get('title')
-    series_id = series.get('id')  # For de-duplication
-    series_tags = series.get('tagsArray', [])  # Sonarr v4 uses tagsArray
+        return jsonify({"status": "success", "message": "Test webhook processed successfully"}), 200
 
-    users_to_ping = get_discord_user_ids_for_tags(series_tags)
+    # Note: Sonarr v3 uses "Download", v4 might use "Grab" for pre-import and "EpisodeImported" #
+    elif event_type in ['Download', 'Episode Imported']:
+        series = payload.get('series', {})
+        episodes = payload.get('episodes', [])
+        release = payload.get('release', {})
 
-    if not users_to_ping:
-        logger.info(
-            f"No users found for Sonarr event tags: {series_tags} for series '{series_title}'.")
-        return jsonify({"status": "no_users_matched", "message": "No users mapped to these tags"}), 200
+        if not series or not episodes:
+            logger.warning(
+                "Sonarr webhook payload missing series or episodes data for Download/Import event.")
+            return jsonify({"status": "error", "message": "Missing series or episode data"}), 400
 
-    for episode in episodes:
-        episode_id = episode.get('id')  # For de-duplication
-        episode_number = episode.get('episodeNumber')
-        season_number = episode.get('seasonNumber')
-        episode_title = episode.get('title')
+        series_title = series.get('title')
+        series_id = series.get('id')
+        series_tags = series.get('tagsArray', [])
 
-        # Create a unique ID for this specific downloaded/imported episode release to prevent duplicate notifications
-        episode_unique_id = (series_id, episode_id, release.get(
-            'releaseTitle'))  # Use releaseTitle for better uniqueness
+        users_to_ping = get_discord_user_ids_for_tags(series_tags)
 
-        if episode_unique_id in NOTIFIED_EPISODES_CACHE:
+        if not users_to_ping and event_type in ['Download', 'Episode Imported']:
             logger.info(
-                f"Episode {series_title} S{season_number:02d}E{episode_number:02d} (Release: {release.get('releaseTitle')}) already notified. Skipping.")
-            continue
+                f"No users found for Sonarr event tags: {series_tags} for series '{series_title}'. No notification sent.")
+            return jsonify({"status": "no_users_matched", "message": "No users mapped to these tags, so no notification sent."}), 200
 
-        NOTIFIED_EPISODES_CACHE.append(episode_unique_id)
+        for episode in episodes:
+            episode_id = episode.get('id')
+            episode_number = episode.get('episodeNumber')
+            season_number = episode.get('seasonNumber')
+            episode_title = episode.get('title')
 
-        mentions = " ".join([f"<@{uid}>" for uid in users_to_ping])
+            episode_unique_id = (series_id, episode_id,
+                                 release.get('releaseTitle'))
 
-        notification_message = (
-            f"🎉 {mentions} **New Episode Available!** 🎉\n"
-            f"**Series:** {series_title}\n"
-            f"**Episode:** S{season_number:02d}E{episode_number:02d} - {episode_title}\n"
-            f"It's now available for streaming!"
-        )
+            if episode_unique_id in NOTIFIED_EPISODES_CACHE:
+                logger.info(
+                    f"Episode {series_title} S{season_number:02d}E{episode_number:02d} (Release: {release.get('releaseTitle')}) already notified. Skipping.")
+                continue
 
-        if 'discord_bot' in app.config:
-            await send_discord_notification(
-                app.config['discord_bot'],
-                users_to_ping,
-                notification_message,
-                NOTIFICATION_CHANNEL_ID
+            NOTIFIED_EPISODES_CACHE.append(episode_unique_id)
+
+            mentions = " ".join([f"<@{uid}>" for uid in users_to_ping])
+            notification_message = (
+                f"🎉 {mentions} **New Episode Available!** 🎉\n"
+                f"**Series:** {series_title}\n"
+                f"**Episode:** S{season_number:02d}E{episode_number:02d} - {episode_title}\n"
+                f"It's now available for streaming!"
             )
-            logger.info(
-                f"Notification sent for {series_title} S{season_number:02d}E{episode_number:02d} to {len(users_to_ping)} users.")
-        else:
-            logger.error(
-                "Discord bot instance not found in Flask app config. Cannot send notifications.")
 
-    return jsonify({"status": "success", "message": "Webhook processed"}), 200
+            if 'discord_bot' in app.config:
+                await send_discord_notification(
+                    app.config['discord_bot'],
+                    users_to_ping,
+                    notification_message,
+                    NOTIFICATION_CHANNEL_ID
+                )
+                logger.info(
+                    f"Notification sent for {series_title} S{season_number:02d}E{episode_number:02d} to {len(users_to_ping)} users.")
+            else:
+                logger.error(
+                    "Discord bot instance not found in Flask app config. Cannot send notifications for Download/Import.")
+
+        return jsonify({"status": "success", "message": "Webhook processed"}), 200
+
+    else:
+        # For any other event_type not explicitly handled above
+        logger.info(
+            f"Sonarr event type '{event_type}' is not explicitly handled. Ignoring.")
+        return jsonify({"status": "ignored", "message": f"Event type '{event_type}' not handled"}), 200
 
 # --- Background Task for Overseerr User Sync ---
 
 
-# bot_instance might not be needed here if not directly used for notifications
 async def start_overseerr_user_sync(bot_instance):
     """Periodically syncs users from Overseerr."""
     while True:
@@ -295,11 +329,10 @@ async def start_overseerr_user_sync(bot_instance):
 
 def run_webhook_server(bot_instance):
     """Starts the Flask server in a separate thread/process."""
-    app.config['discord_bot'] = bot_instance  # Pass bot instance for sending notifications
+    app.config['discord_bot'] = bot_instance
 
     logger.info("Flask server attempting to start on host 0.0.0.0 port 5000...")
     app.run(host='0.0.0.0', port=5000, debug=False)
-    # This line might not be reached if app.run blocks indefinitely
     logger.info("Flask server stopped.")
 
 # This function will be called by bot.py
