@@ -239,9 +239,9 @@ async def sonarr_webhook():
         return jsonify({"status": "error", "message": "Bot instance not configured"}), 500
 
     if event_type == "Test":
+        # ... (Your existing Test event logic - it's good as is) ...
         logger.info("Sonarr Test webhook received and processed successfully!")
         test_notification_message = "Sonarr webhook test successful! Connectivity is confirmed."
-
         embed = discord.Embed(
             title="Sonarr Test Successful!",
             description="This confirms that your Plexbot is receiving webhooks from Sonarr correctly.",
@@ -253,247 +253,291 @@ async def sonarr_webhook():
         else:
             embed.set_author(name="Plexbot Notification Service")
         embed.timestamp = datetime.utcnow()
-
         if NOTIFICATION_CHANNEL_ID:
             coro = send_discord_notification(
-                bot_instance=bot_instance,
-                user_ids=set(),
-                message_content=None,  # No pings for a test message
-                channel_id=NOTIFICATION_CHANNEL_ID,
-                embed=embed
+                bot_instance=bot_instance, user_ids=set(), message_content=None,
+                channel_id=NOTIFICATION_CHANNEL_ID, embed=embed
             )
             future = asyncio.run_coroutine_threadsafe(coro, bot_instance.loop)
             try:
                 future.result(timeout=10)
                 logger.info("Discord notification for Sonarr Test completed.")
-            except asyncio.TimeoutError:
-                logger.error(
-                    "Sending Discord notification for Sonarr Test timed out.")
             except Exception as e:
                 logger.error(
                     f"Error running Sonarr Test Discord notification: {e}", exc_info=True)
         else:
             logger.warning(
                 "Discord notification_channel_id not set; cannot send Sonarr Test notification.")
-
         return jsonify({"status": "success", "message": "Test webhook processed successfully"}), 200
 
     elif event_type in ['Download', 'Episode Imported']:
         series_data = payload.get('series', {})
-        episodes_data = payload.get('episodes', [])  # This is a list
+        # Sonarr sends a list of episodes
+        episodes_payload_list = payload.get('episodes', [])
+        # General release info for the batch
         release_data = payload.get('release', {})
 
-        if not series_data or not episodes_data:
-            logger.warning(
-                "Sonarr webhook missing series or episodes data for Download/Import.")
+        if not series_data or not episodes_payload_list:
+            logger.warning("Sonarr webhook missing series or episodes data.")
             return jsonify({"status": "error", "message": "Missing series or episode data"}), 400
-
-        # Process the first episode in the list
-        episode_data = episodes_data[0]
 
         series_title = series_data.get('title', "Unknown Series")
         series_year = series_data.get('year')
-        season_number = episode_data.get('seasonNumber', 0)
-        episode_number = episode_data.get('episodeNumber', 0)
-        episode_title = episode_data.get('title', "Unknown Episode")
-        episode_overview = episode_data.get(
-            'overview', "No overview available.")
-        air_date_utc_str = episode_data.get('airDateUtc')
-
-        # --- Corrected Quality Extraction Logic ---
-        quality_string = "N/A"  # Initialize
-
-        episode_file_list = payload.get('episodeFiles')
-        episode_file_data = None
-
-        if episode_file_list and isinstance(episode_file_list, list) and len(episode_file_list) > 0:
-            episode_file_data = episode_file_list[0]
-        elif payload.get('episodeFile'):  # Fallback for singular episodeFile object
-            episode_file_data = payload.get('episodeFile')
-
-        if episode_file_data and isinstance(episode_file_data, dict):
-            logger.debug(
-                f"Processing episode_file_data for quality: {episode_file_data}")
-
-            custom_formats_list = episode_file_data.get('customFormats')
-            custom_formats_str = ""
-            if custom_formats_list and isinstance(custom_formats_list, list) and custom_formats_list:
-                custom_formats_str = f" ({', '.join(custom_formats_list)})"
-
-            q_from_file_obj = episode_file_data.get('quality')
-
-            if isinstance(q_from_file_obj, str):
-                quality_string = q_from_file_obj
-                # Append custom formats if they were found at the episode_file_data level
-                quality_string += custom_formats_str
-            elif isinstance(q_from_file_obj, dict):  # Nested quality object
-                quality_details = q_from_file_obj
-                base_quality_info = quality_details.get('quality')
-                if base_quality_info and isinstance(base_quality_info, dict) and base_quality_info.get('name'):
-                    quality_string = base_quality_info.get('name')
-
-                # Use custom_formats_str if already populated from episode_file_data.customFormats
-                # Otherwise, check within the nested quality object
-                if not custom_formats_str:  # Check only if not already found
-                    nested_custom_formats = quality_details.get(
-                        'customFormats')
-                    if nested_custom_formats and isinstance(nested_custom_formats, list) and nested_custom_formats:
-                        custom_formats_str = f" ({', '.join(nested_custom_formats)})"
-
-                # Avoid "N/A (format)"
-                if quality_string != "N/A" or custom_formats_str:
-                    if quality_string == "N/A" and custom_formats_str:
-                        # Use only custom formats if base quality is N/A and we have custom formats
-                        quality_string = custom_formats_str.strip(" ()")
-                    elif quality_string != "N/A":
-                        quality_string += custom_formats_str
-            # This case handles if 'quality' field is missing but 'customFormats' are present at file level
-            elif quality_string == "N/A" and custom_formats_str:
-                quality_string = custom_formats_str.strip(" ()")
-
-        # Fallback to release_data if quality is still "N/A"
-        if quality_string == "N/A" and release_data and isinstance(release_data, dict):
-            logger.debug(
-                "Falling back to release_data for quality information.")
-            quality_name_from_release = release_data.get('quality')
-            if quality_name_from_release:
-                quality_string = quality_name_from_release
-
-            custom_formats_from_release = release_data.get('customFormats')
-            if custom_formats_from_release and isinstance(custom_formats_from_release, list) and custom_formats_from_release:
-                cf_release_str = f" ({', '.join(custom_formats_from_release)})"
-                if quality_string != "N/A" and quality_string != "":
-                    quality_string += cf_release_str
-                elif quality_string == "N/A" and cf_release_str:  # only custom formats found in release
-                    quality_string = cf_release_str.strip(" ()")
-        # --- End Corrected Quality Extraction Logic ---
-
-        # --- Construct the Embed ---
-        embed_title = f"{series_title}"
-        if series_year:
-            embed_title += f" ({series_year})"
-        embed_title += f" (S{season_number:02d}E{episode_number:02d})"
-
-        embed = discord.Embed(
-            title=embed_title,
-            color=discord.Color.green()
-        )
-
-        if bot_instance.user and bot_instance.user.avatar:
-            embed.set_author(name="New Episode Available - Sonarr",
-                             icon_url=bot_instance.user.avatar.url)
-        else:
-            embed.set_author(name="New Episode Available - Sonarr")
-
-        embed.add_field(name="Episode Title",
-                        value=episode_title if episode_title else "N/A", inline=False)
-
-        if len(episode_overview) > 1020:
-            episode_overview = episode_overview[:1020] + "..."
-        embed.add_field(name=f"E{episode_number} Overview",
-                        value=episode_overview, inline=False)
-
-        if air_date_utc_str:
-            try:
-                air_date = datetime.fromisoformat(
-                    air_date_utc_str.replace('Z', '+00:00'))
-                embed.add_field(name="Air Date", value=air_date.strftime(
-                    '%m/%d/%Y'), inline=True)
-            except ValueError:
-                logger.warning(
-                    f"Could not parse airDateUtc: {air_date_utc_str}")
-                # Add field with N/A only if airDateUtc was present but unparseable
-                embed.add_field(name="Air Date",
-                                value="N/A (unparseable)", inline=True)
-        else:
-            embed.add_field(name="Air Date", value="N/A", inline=True)
-
-        embed.add_field(
-            name="Quality", value=quality_string if quality_string else "N/A", inline=True)
-
-        series_images = series_data.get('images', [])
-        poster_url = None
-        for img in series_images:
-            if img.get('coverType') == 'poster' and img.get('remoteUrl'):  # Sonarr v4 uses remoteUrl
-                poster_url = img.get('remoteUrl')
-            # Older Sonarr might use url
-            elif img.get('coverType') == 'poster' and img.get('url'):
-                poster_url = img.get('url')
-            if poster_url:
-                break
-        if poster_url:
-            embed.set_thumbnail(url=poster_url)
-
-        fanart_url = None
-        for img in series_images:  # Check series images first
-            if img.get('coverType') == 'fanart' and img.get('remoteUrl'):
-                fanart_url = img.get('remoteUrl')
-            elif img.get('coverType') == 'fanart' and img.get('url'):
-                fanart_url = img.get('url')
-            if fanart_url:
-                break
-
-        # Sonarr v4 episode objects might have an 'images' array for screenshots
-        episode_images = episode_data.get('images', [])
-        if episode_images:  # Prefer episode image if available
-            if episode_images[0].get('remoteUrl'):
-                fanart_url = episode_images[0].get('remoteUrl')
-            elif episode_images[0].get('url'):
-                fanart_url = episode_images[0].get('url')
-
-        if fanart_url:
-            embed.set_image(url=fanart_url)
-
-        embed.timestamp = datetime.utcnow()  # Sets the footer timestamp
-
-        # --- End Embed Construction ---
+        series_id_for_dedupe = series_data.get('id')
 
         users_to_ping = get_discord_user_ids_for_tags(
-            # Ensure using tagsArray if that's what Sonarr sends
-            series_data.get('tags', []))
+            series_data.get('tags', []))  # Use 'tags'
         mentions_text = " ".join(
             [f"<@{uid}>" for uid in users_to_ping]) if users_to_ping else ""
 
-        series_id_for_dedupe = series_data.get('id')
-        # Corrected: this should be from episode_data
-        episode_id_for_dedupe = episode_data.get('id')
-        release_title_for_dedupe = release_data.get('releaseTitle')
-        episode_unique_id = (series_id_for_dedupe,
-                             episode_id_for_dedupe, release_title_for_dedupe)
+        newly_added_episodes_details = []
+        processed_episode_keys_for_cache = []
 
-        if episode_unique_id in NOTIFIED_EPISODES_CACHE:
+        for episode_data in episodes_payload_list:
+            episode_id_for_dedupe = episode_data.get('id')
+            # For de-duplication, use series ID, episode ID, and release title if available.
+            # If release_data is per-batch, this is fine.
+            # If handling an 'EpisodeImported' event, 'episodeFile.relativePath' might be more unique than 'releaseTitle'.
+            current_episode_file_data = None
+            if payload.get('episodeFiles') and isinstance(payload.get('episodeFiles'), list) and payload.get('episodeFiles'):
+                # Try to find the matching episodeFile for the current episode_data
+                for ef in payload.get('episodeFiles'):
+                    # This matching is simplistic; Sonarr's structure might relate episodeFile to episode ID differently or by order
+                    # For now, we'll assume if there's one episodeFile, it matches the first episode, or that episodeFile applies to all.
+                    # A more robust match would involve checking if episode_id_for_dedupe is linked to an episodeFile ID.
+                    # However, for quality, we often just take the first episodeFile for the batch.
+                    # If only one episode, this episodeFile belongs to it
+                    if len(episodes_payload_list) == 1:
+                        current_episode_file_data = ef
+                    break  # Take first for now if multiple
+            # Singular fallback
+            if not current_episode_file_data and payload.get('episodeFile'):
+                current_episode_file_data = payload.get('episodeFile')
+
+            # Construct a unique key for de-duplication
+            # Using series ID, episode ID. Release title makes it specific to a release.
+            # If release data is not specific enough for multi-episode imports from *different* releases (rare in one webhook),
+            # then `current_episode_file_data.get('relativePath')` could be added or used.
+            unique_key_parts = [series_id_for_dedupe, episode_id_for_dedupe]
+            if release_data.get('releaseTitle'):
+                unique_key_parts.append(release_data.get('releaseTitle'))
+            elif current_episode_file_data and current_episode_file_data.get('relativePath'):
+                unique_key_parts.append(
+                    current_episode_file_data.get('relativePath'))
+            episode_unique_id = tuple(unique_key_parts)
+
+            if episode_unique_id in NOTIFIED_EPISODES_CACHE:
+                logger.info(
+                    f"Episode S{episode_data.get('seasonNumber'):02d}E{episode_data.get('episodeNumber'):02d} of {series_title} (ID: {episode_unique_id}) already notified. Skipping.")
+                continue
+
+            # Add to list of episodes to notify about in this batch
+            newly_added_episodes_details.append(episode_data)
+            processed_episode_keys_for_cache.append(episode_unique_id)
+
+        if not newly_added_episodes_details:
             logger.info(
-                f"Episode {series_title} S{season_number:02d}E{episode_number:02d} (Release: {release_title_for_dedupe}) already notified based on cache. Skipping.")
-            return jsonify({"status": "success", "message": "Already notified, skipped"}), 200
+                f"All episodes in payload for {series_title} were already in cache. No new notifications.")
+            return jsonify({"status": "success", "message": "All episodes previously notified"}), 200
 
-        NOTIFIED_EPISODES_CACHE.append(episode_unique_id)
+        # Add all genuinely new episodes to the cache at once
+        for key in processed_episode_keys_for_cache:
+            NOTIFIED_EPISODES_CACHE.append(key)
 
-        if users_to_ping or NOTIFICATION_CHANNEL_ID:
+        final_embed = None
+
+        if len(newly_added_episodes_details) == 1:
+            logger.info(
+                f"Single new episode for {series_title}. Sending detailed notification.")
+            # The single new episode
+            episode_data = newly_added_episodes_details[0]
+
+            # --- Reconstruct detailed embed for this single episode ---
+            season_number = episode_data.get('seasonNumber', 0)
+            episode_number = episode_data.get('episodeNumber', 0)
+            episode_title = episode_data.get('title', "Unknown Episode")
+            episode_overview = episode_data.get(
+                'overview', "No overview available.")
+            air_date_utc_str = episode_data.get('airDateUtc')
+
+            # (Full quality extraction logic using `payload.get('episodeFile')` or `payload.get('episodeFiles')[0]` and `release_data`)
+            quality_string = "N/A"  # Placeholder - insert the refined quality extraction logic here
+            # The refined quality logic provided in previous steps should be placed here,
+            # using `payload.get('episodeFiles')` (and taking the first element if it's a list and relevant to this episode)
+            # or `payload.get('episodeFile')`, and `release_data`.
+            # For example:
+            ep_file_data_for_quality = None
+            if payload.get('episodeFiles') and isinstance(payload.get('episodeFiles'), list) and len(payload.get('episodeFiles')) > 0:
+                # Simplification: use first file's quality for the notification
+                ep_file_data_for_quality = payload.get('episodeFiles')[0]
+            elif payload.get('episodeFile'):
+                ep_file_data_for_quality = payload.get('episodeFile')
+
+            if ep_file_data_for_quality and isinstance(ep_file_data_for_quality, dict):
+                custom_formats_list = ep_file_data_for_quality.get(
+                    'customFormats')
+                custom_formats_str = ""
+                if custom_formats_list and isinstance(custom_formats_list, list) and custom_formats_list:
+                    custom_formats_str = f" ({', '.join(custom_formats_list)})"
+                q_from_file_obj = ep_file_data_for_quality.get('quality')
+                if isinstance(q_from_file_obj, str):
+                    quality_string = q_from_file_obj + custom_formats_str
+                elif isinstance(q_from_file_obj, dict):
+                    # ... (more detailed nested logic as discussed before) ...
+                    # For brevity here, assume it sets quality_string
+                    base_quality_info = q_from_file_obj.get('quality')
+                    if base_quality_info and isinstance(base_quality_info, dict) and base_quality_info.get('name'):
+                        quality_string = base_quality_info.get('name')
+                    if not custom_formats_str:  # Check nested if not found at file level
+                        nested_custom_formats = q_from_file_obj.get(
+                            'customFormats')
+                        if nested_custom_formats and isinstance(nested_custom_formats, list) and nested_custom_formats:
+                            custom_formats_str = f" ({', '.join(nested_custom_formats)})"
+                    if quality_string != "N/A" or custom_formats_str:
+                        if quality_string == "N/A" and custom_formats_str:
+                            quality_string = custom_formats_str.strip(" ()")
+                        elif quality_string != "N/A":
+                            quality_string += custom_formats_str
+                elif quality_string == "N/A" and custom_formats_str:
+                    quality_string = custom_formats_str.strip(" ()")
+            # Fallback
+            if quality_string == "N/A" and release_data and isinstance(release_data, dict):
+                # ... (fallback logic for release_data quality as discussed) ...
+                quality_name_from_release = release_data.get('quality')
+                if quality_name_from_release:
+                    quality_string = quality_name_from_release
+                custom_formats_from_release = release_data.get('customFormats')
+                if custom_formats_from_release and isinstance(custom_formats_from_release, list) and custom_formats_from_release:
+                    cf_release_str = f" ({', '.join(custom_formats_from_release)})"
+                    if quality_string != "N/A" and quality_string != "":
+                        quality_string += cf_release_str
+                    elif quality_string == "N/A" and cf_release_str:
+                        quality_string = cf_release_str.strip(" ()")
+
+            embed_title_str = f"{series_title}"
+            if series_year:
+                embed_title_str += f" ({series_year})"
+            embed_title_str += f" (S{season_number:02d}E{episode_number:02d})"
+
+            final_embed = discord.Embed(
+                title=embed_title_str, color=discord.Color.green())
+            if bot_instance.user and bot_instance.user.avatar:
+                final_embed.set_author(
+                    name="New Episode Available - Sonarr", icon_url=bot_instance.user.avatar.url)
+            else:
+                final_embed.set_author(name="New Episode Available - Sonarr")
+
+            final_embed.add_field(
+                name="Episode Title", value=episode_title if episode_title else "N/A", inline=False)
+            if len(episode_overview) > 1020:
+                episode_overview = episode_overview[:1020] + "..."
+            final_embed.add_field(
+                name=f"E{episode_number} Overview", value=episode_overview, inline=False)
+            if air_date_utc_str:
+                try:
+                    air_date = datetime.fromisoformat(
+                        air_date_utc_str.replace('Z', '+00:00'))
+                    final_embed.add_field(
+                        name="Air Date", value=air_date.strftime('%m/%d/%Y'), inline=True)
+                except ValueError:
+                    logger.warning(
+                        f"Could not parse airDateUtc: {air_date_utc_str}")
+                    final_embed.add_field(
+                        name="Air Date", value="N/A (unparseable)", inline=True)
+            else:
+                final_embed.add_field(
+                    name="Air Date", value="N/A", inline=True)
+            final_embed.add_field(
+                name="Quality", value=quality_string if quality_string else "N/A", inline=True)
+
+            series_images = series_data.get('images', [])
+            poster_url = next((img.get('remoteUrl') or img.get(
+                'url') for img in series_images if img.get('coverType') == 'poster'), None)
+            if poster_url:
+                final_embed.set_thumbnail(url=poster_url)
+
+            fanart_url = next((img.get('remoteUrl') or img.get(
+                'url') for img in series_images if img.get('coverType') == 'fanart'), None)
+            episode_images_list = episode_data.get(
+                'images', [])  # For the specific episode
+            if episode_images_list:
+                ep_img_url = episode_images_list[0].get(
+                    'remoteUrl') or episode_images_list[0].get('url')
+                if ep_img_url:
+                    fanart_url = ep_img_url  # Prefer episode image for single detailed view
+            if fanart_url:
+                final_embed.set_image(url=fanart_url)
+
+            final_embed.timestamp = datetime.utcnow()
+
+        else:  # len(newly_added_episodes_details) > 1
+            logger.info(
+                f"Multiple new episodes ({len(newly_added_episodes_details)}) for {series_title}. Sending consolidated notification.")
+
+            embed_title_str = f"{series_title}"
+            if series_year:
+                embed_title_str += f" ({series_year})"
+
+            final_embed = discord.Embed(
+                title=f"Multiple New Episodes: {embed_title_str}",
+                color=discord.Color.blue()  # Different color for bulk
+            )
+            if bot_instance.user and bot_instance.user.avatar:
+                final_embed.set_author(
+                    name="Sonarr Bulk Import", icon_url=bot_instance.user.avatar.url)
+            else:
+                final_embed.set_author(name="Sonarr Bulk Import")
+
+            series_images = series_data.get('images', [])
+            poster_url = next((img.get('remoteUrl') or img.get(
+                'url') for img in series_images if img.get('coverType') == 'poster'), None)
+            if poster_url:
+                final_embed.set_thumbnail(url=poster_url)
+
+            episode_list_text = []
+            for ep_data in newly_added_episodes_details:
+                s_num = ep_data.get('seasonNumber', 0)
+                e_num = ep_data.get('episodeNumber', 0)
+                e_title = ep_data.get('title', "N/A")
+                episode_list_text.append(
+                    f"S{s_num:02d}E{e_num:02d} - {e_title}")
+
+            description_text = "\n".join(episode_list_text)
+            if len(description_text) > 4090:  # Max embed description length is 4096
+                description_text = description_text[:4090] + "\n... (and more)"
+            final_embed.description = description_text
+
+            final_embed.set_footer(
+                text=f"{len(newly_added_episodes_details)} new episodes added.")
+            final_embed.timestamp = datetime.utcnow()
+
+        # Send the notification
+        if final_embed and (users_to_ping or NOTIFICATION_CHANNEL_ID):
             coro = send_discord_notification(
                 bot_instance=bot_instance,
                 user_ids=users_to_ping,
                 message_content=mentions_text,
                 channel_id=NOTIFICATION_CHANNEL_ID,
-                embed=embed
+                embed=final_embed
             )
             future = asyncio.run_coroutine_threadsafe(coro, bot_instance.loop)
             try:
                 future.result(timeout=10)
                 logger.info(
-                    f"Discord embed notification for {embed_title} sent successfully.")
+                    f"Discord notification for {series_title} ( episodi(s): {len(newly_added_episodes_details)}) sent.")
             except asyncio.TimeoutError:
                 logger.error(
-                    f"Sending Discord embed notification for {embed_title} timed out.")
+                    f"Sending Discord notification for {series_title} timed out.")
             except Exception as e:
                 logger.error(
-                    f"Error running Download/Import Discord embed notification: {e}", exc_info=True)
+                    f"Error running Discord notification for {series_title}: {e}", exc_info=True)
         else:
             logger.info(
-                f"No users to ping and no notification channel ID for {embed_title}. No Discord notification sent.")
+                f"No embed created or no users/channel for {series_title}. No Discord notification sent.")
 
         return jsonify({"status": "success", "message": "Webhook processed"}), 200
 
-    else:
+    else:  # Other event types
         logger.info(
             f"Sonarr event type '{event_type}' is not explicitly handled. Ignoring.")
         return jsonify({"status": "ignored", "message": f"Event type '{event_type}' not handled"}), 200
