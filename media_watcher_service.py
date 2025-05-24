@@ -272,10 +272,14 @@ async def sonarr_webhook():
 
     elif event_type in ['Download', 'Episode Imported']:
         series_data = payload.get('series', {})
-        # Sonarr sends a list of episodes
         episodes_payload_list = payload.get('episodes', [])
-        # General release info for the batch
         release_data = payload.get('release', {})
+
+        # Get all episode file data from the payload if present
+        all_episode_files_from_payload = payload.get(
+            'episodeFiles', [])  # For multi-episode payloads
+        singular_episode_file_from_payload = payload.get(
+            'episodeFile')  # For single-episode payloads
 
         if not series_data or not episodes_payload_list:
             logger.warning("Sonarr webhook missing series or episodes data.")
@@ -286,7 +290,7 @@ async def sonarr_webhook():
         series_id_for_dedupe = series_data.get('id')
 
         users_to_ping = get_discord_user_ids_for_tags(
-            series_data.get('tags', []))  # Use 'tags'
+            series_data.get('tags', []))
         mentions_text = " ".join(
             [f"<@{uid}>" for uid in users_to_ping]) if users_to_ping else ""
 
@@ -295,43 +299,74 @@ async def sonarr_webhook():
 
         for episode_data in episodes_payload_list:
             episode_id_for_dedupe = episode_data.get('id')
-            # For de-duplication, use series ID, episode ID, and release title if available.
-            # If release_data is per-batch, this is fine.
-            # If handling an 'EpisodeImported' event, 'episodeFile.relativePath' might be more unique than 'releaseTitle'.
-            current_episode_file_data = None
-            if payload.get('episodeFiles') and isinstance(payload.get('episodeFiles'), list) and payload.get('episodeFiles'):
-                # Try to find the matching episodeFile for the current episode_data
-                for ef in payload.get('episodeFiles'):
-                    # This matching is simplistic; Sonarr's structure might relate episodeFile to episode ID differently or by order
-                    # For now, we'll assume if there's one episodeFile, it matches the first episode, or that episodeFile applies to all.
-                    # A more robust match would involve checking if episode_id_for_dedupe is linked to an episodeFile ID.
-                    # However, for quality, we often just take the first episodeFile for the batch.
-                    # If only one episode, this episodeFile belongs to it
-                    if len(episodes_payload_list) == 1:
-                        current_episode_file_data = ef
-                    break  # Take first for now if multiple
-            # Singular fallback
-            if not current_episode_file_data and payload.get('episodeFile'):
-                current_episode_file_data = payload.get('episodeFile')
+            s_num = episode_data.get('seasonNumber')
+            ep_num = episode_data.get('episodeNumber')
 
-            # Construct a unique key for de-duplication
-            # Using series ID, episode ID. Release title makes it specific to a release.
-            # If release data is not specific enough for multi-episode imports from *different* releases (rare in one webhook),
-            # then `current_episode_file_data.get('relativePath')` could be added or used.
+            # Find the corresponding episodeFile for the current episode_data
+            current_episode_file_info = None
+            if singular_episode_file_from_payload:  # Likely an individual episode webhook
+                current_episode_file_info = singular_episode_file_from_payload
+            elif all_episode_files_from_payload:  # Likely a multi-episode webhook
+                # Attempt to match based on season/episode number in relativePath (can be fragile)
+                # A more robust match would be if Sonarr provided episode IDs within episodeFile objects.
+                # For now, this is an approximation for payloads like the season pack.
+                # Sonarr's own 'episodeFile' object often contains 'seasonNumber' and 'episodeNumbers' (plural)
+                # which could be used for a more direct match if available.
+                # Your provided season pack payload doesn't show this direct link in episodeFiles items,
+                # so we rely on path or assume order if lengths match.
+
+                # Simplistic match: if only one file and one episode, they match.
+                # Or if trying to find a match from a list of files for the current episode.
+                # The payload shows `episodeFiles` array directly contains file info.
+                # Each item in `episodeFiles` has a `relativePath`.
+                # We need to match `episode_data` (from `episodes` array) to an item in `episodeFiles`.
+                # This is hard without a direct linking ID. Let's assume for now `relativePath` is our best bet
+                # or that the first episodeFile in the payload is relevant if only one episode is being processed.
+
+                # If the webhook has multiple episodes in `episodes_payload_list`
+                # AND multiple files in `all_episode_files_from_payload`, we need a better match.
+                # For simplicity, if it's a multi-episode payload, we'll assume the first episodeFile's data
+                # is representative for things like overall quality for the *embed construction*,
+                # but for *de-duplication key*, we need per-episode file path.
+
+                # Let's refine the search for the specific episode file's relativePath
+                found_ef = None
+                for ef in all_episode_files_from_payload:
+                    # A common pattern for file names: Series.Name.S02E05.
+                    # This is a heuristic and might need adjustment based on your file naming.
+                    path_segment_to_match = f"S{s_num:02d}E{ep_num:02d}"
+                    # Also check against sceneName if relativePath doesn't match well
+                    if (ef.get('relativePath') and path_segment_to_match in ef['relativePath']) or \
+                       (ef.get('sceneName') and path_segment_to_match in ef['sceneName']):
+                        found_ef = ef
+                        break
+                if found_ef:
+                    current_episode_file_info = found_ef
+                elif all_episode_files_from_payload:  # Fallback if no specific match, take the first
+                    current_episode_file_info = all_episode_files_from_payload[0]
+
             unique_key_parts = [series_id_for_dedupe, episode_id_for_dedupe]
-            if release_data.get('releaseTitle'):
-                unique_key_parts.append(release_data.get('releaseTitle'))
-            elif current_episode_file_data and current_episode_file_data.get('relativePath'):
+            if current_episode_file_info and current_episode_file_info.get('relativePath'):
                 unique_key_parts.append(
-                    current_episode_file_data.get('relativePath'))
+                    current_episode_file_info.get('relativePath'))
+            # Fallback, less specific for multi-episode packs
+            elif release_data.get('releaseTitle'):
+                unique_key_parts.append(release_data.get('releaseTitle'))
+            # If still no unique part, consider adding dateAdded from episodeFile if very precise de-dupe is needed
+            # or even sceneName from episodeFile.
+            if len(unique_key_parts) == 2 and current_episode_file_info and current_episode_file_info.get('sceneName'):
+                unique_key_parts.append(
+                    current_episode_file_info.get('sceneName'))
+
             episode_unique_id = tuple(unique_key_parts)
+            logger.debug(
+                f"Generated de-duplication key for S{s_num:02d}E{ep_num:02d}: {episode_unique_id}")
 
             if episode_unique_id in NOTIFIED_EPISODES_CACHE:
                 logger.info(
-                    f"Episode S{episode_data.get('seasonNumber'):02d}E{episode_data.get('episodeNumber'):02d} of {series_title} (ID: {episode_unique_id}) already notified. Skipping.")
+                    f"Episode S{s_num:02d}E{ep_num:02d} of {series_title} (ID: {episode_unique_id}) already in cache. Skipping.")
                 continue
 
-            # Add to list of episodes to notify about in this batch
             newly_added_episodes_details.append(episode_data)
             processed_episode_keys_for_cache.append(episode_unique_id)
 
