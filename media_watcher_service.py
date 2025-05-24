@@ -370,7 +370,7 @@ async def sonarr_webhook():
                 elif quality_string == "N/A" and cf_release_str:
                     quality_string = cf_release_str.strip(" ()")
 
-        # --- Construct the Embed ---
+# --- Construct the Embed ---
         embed_title = f"{series_title}"
         if series_year:
             embed_title += f" ({series_year})"
@@ -390,7 +390,6 @@ async def sonarr_webhook():
         embed.add_field(name="Episode Title",
                         value=episode_title if episode_title else "N/A", inline=False)
 
-        # Truncate overview if too long
         if len(episode_overview) > 1020:
             episode_overview = episode_overview[:1020] + "..."
         embed.add_field(name=f"E{episode_number} Overview",
@@ -412,13 +411,11 @@ async def sonarr_webhook():
         embed.add_field(
             name="Quality", value=quality_string if quality_string else "N/A", inline=True)
 
-        # Thumbnail (Series Poster)
         series_images = series_data.get('images', [])
         poster_url = None
         for img in series_images:
-            if img.get('coverType') == 'poster' and img.get('remoteUrl'):  # Sonarr v4 uses remoteUrl
+            if img.get('coverType') == 'poster' and img.get('remoteUrl'):
                 poster_url = img.get('remoteUrl')
-            # Older Sonarr might use url
             elif img.get('coverType') == 'poster' and img.get('url'):
                 poster_url = img.get('url')
             if poster_url:
@@ -426,10 +423,8 @@ async def sonarr_webhook():
         if poster_url:
             embed.set_thumbnail(url=poster_url)
 
-        # Large Image (Series Fanart or Episode Screenshot if available)
-        # For now, using fanart as episode-specific images are less common in Sonarr webhooks
         fanart_url = None
-        for img in series_images:  # Check series images first
+        for img in series_images:
             if img.get('coverType') == 'fanart' and img.get('remoteUrl'):
                 fanart_url = img.get('remoteUrl')
             elif img.get('coverType') == 'fanart' and img.get('url'):
@@ -437,10 +432,8 @@ async def sonarr_webhook():
             if fanart_url:
                 break
 
-        # Sonarr v4 episode objects might have an 'images' array for screenshots
         episode_images = episode_data.get('images', [])
         if episode_images:
-            # Prefer episode image if available, assuming first one is good
             if episode_images[0].get('remoteUrl'):
                 fanart_url = episode_images[0].get('remoteUrl')
             elif episode_images[0].get('url'):
@@ -449,17 +442,15 @@ async def sonarr_webhook():
         if fanart_url:
             embed.set_image(url=fanart_url)
 
-        embed.timestamp = datetime.utcnow()  # Sets the footer timestamp
-
-        # --- End Embed Construction ---
+        embed.timestamp = datetime.utcnow()
 
         users_to_ping = get_discord_user_ids_for_tags(
             series_data.get('tagsArray', []))
         mentions_text = " ".join(
             [f"<@{uid}>" for uid in users_to_ping]) if users_to_ping else ""
 
-        # De-duplication logic (using only the first episode for this notification)
         series_id_for_dedupe = series_data.get('id')
+        # This should be episode_data.get('id')
         episode_id_for_dedupe = episode_data.get('id')
         release_title_for_dedupe = release_data.get('releaseTitle')
         episode_unique_id = (series_id_for_dedupe,
@@ -501,7 +492,6 @@ async def sonarr_webhook():
         logger.info(
             f"Sonarr event type '{event_type}' is not explicitly handled. Ignoring.")
         return jsonify({"status": "ignored", "message": f"Event type '{event_type}' not handled"}), 200
-
 # --- Background Task for Overseerr User Sync ---
 
 
