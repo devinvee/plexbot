@@ -450,7 +450,7 @@ async def sonarr_webhook():
 
         users_to_ping = get_discord_user_ids_for_tags(
             # Ensure using tagsArray if that's what Sonarr sends
-            series_data.get('tagsArray', []))
+            series_data.get('tags', []))
         mentions_text = " ".join(
             [f"<@{uid}>" for uid in users_to_ping]) if users_to_ping else ""
 
