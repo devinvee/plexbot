@@ -298,10 +298,45 @@ async def sonarr_webhook():
             'overview', "No overview available.")
         air_date_utc_str = episode_data.get('airDateUtc')
 
-        quality = release_data.get('quality', "N/A")
-        # Attempt to get more specific quality from custom formats if it's a V2+
-        if release_data.get('qualityVersion', 0) > 1 and release_data.get('customFormats'):
-            quality = f"{quality} ({', '.join(release_data.get('customFormats', []))})"
+        quality_string = "N/A"
+        # This is primary for imported files
+        episode_file_data = payload.get('episodeFile')
+
+        if episode_file_data and isinstance(episode_file_data, dict):
+            quality_details = episode_file_data.get('quality')
+            if quality_details and isinstance(quality_details, dict):
+                # Get the base quality name (e.g., "WEBDL-1080p")
+                base_quality_info = quality_details.get('quality')
+                if base_quality_info and isinstance(base_quality_info, dict):
+                    quality_string = base_quality_info.get('name', "N/A")
+
+                # Get custom formats (Sonarr v4+)
+                custom_formats = quality_details.get('customFormats')
+                if custom_formats and isinstance(custom_formats, list) and custom_formats:
+                    custom_formats_str = ", ".join(custom_formats)
+                    if quality_string != "N/A" and quality_string != "":  # Check if quality_string is not "N/A" or empty
+                        quality_string += f" ({custom_formats_str})"
+                    else:  # If base quality was N/A, just use custom formats
+                        quality_string = custom_formats_str
+
+        # Fallback to release_data if episodeFile info wasn't sufficient or present
+        # (e.g., for a pure "Grab" event if you notify on that, or if episodeFile lacks detail)
+        if quality_string == "N/A" and release_data and isinstance(release_data, dict):
+            logger.debug(
+                "Falling back to release_data for quality information.")
+            quality_name_from_release = release_data.get('quality')
+            if quality_name_from_release:
+                quality_string = quality_name_from_release
+
+            # Sonarr v4 release object might also have customFormats
+            custom_formats_from_release = release_data.get('customFormats')
+            if custom_formats_from_release and isinstance(custom_formats_from_release, list) and custom_formats_from_release:
+                custom_formats_release_str = ", ".join(
+                    custom_formats_from_release)
+                if quality_string != "N/A" and quality_string != "":
+                    quality_string += f" ({custom_formats_release_str})"
+                else:  # If base quality was N/A, just use custom formats
+                    quality_string = custom_formats_release_str
 
         # --- Construct the Embed ---
         embed_title = f"{series_title}"
