@@ -266,6 +266,9 @@ async def sonarr_webhook():
             try:
                 future.result(timeout=10)
                 logger.info("Discord notification for Sonarr Test completed.")
+            except asyncio.TimeoutError:
+                logger.error(
+                    "Sending Discord notification for Sonarr Test timed out.")
             except Exception as e:
                 logger.error(
                     f"Error running Sonarr Test Discord notification: {e}", exc_info=True)
@@ -285,21 +288,6 @@ async def sonarr_webhook():
                 "Sonarr webhook missing series or episodes data for Download/Import.")
             return jsonify({"status": "error", "message": "Missing series or episode data"}), 400
 
-        # Assuming one episode per Download/Import webhook for notification simplicity
-        # If multiple episodes can arrive in one webhook, you might loop or adjust
-        episode_data = episodes_data[0]
-
-        series_title = series_data.get('title', "Unknown Series")elif event_type in ['Download', 'Episode Imported']:
-        series_data = payload.get('series', {})
-        episodes_data = payload.get('episodes', [])  # This is a list
-        # Still useful for some release info or fallback
-        release_data = payload.get('release', {})
-
-        if not series_data or not episodes_data:
-            logger.warning(
-                "Sonarr webhook missing series or episodes data for Download/Import.")
-            return jsonify({"status": "error", "message": "Missing series or episode data"}), 400
-
         # Process the first episode in the list
         episode_data = episodes_data[0]
 
@@ -312,6 +300,7 @@ async def sonarr_webhook():
             'overview', "No overview available.")
         air_date_utc_str = episode_data.get('airDateUtc')
 
+        # --- Corrected Quality Extraction Logic ---
         quality_string = "N/A"  # Initialize
 
         episode_file_list = payload.get('episodeFiles')
@@ -319,12 +308,13 @@ async def sonarr_webhook():
 
         if episode_file_list and isinstance(episode_file_list, list) and len(episode_file_list) > 0:
             episode_file_data = episode_file_list[0]
-        elif payload.get('episodeFile'):
+        elif payload.get('episodeFile'):  # Fallback for singular episodeFile object
             episode_file_data = payload.get('episodeFile')
 
         if episode_file_data and isinstance(episode_file_data, dict):
             logger.debug(
                 f"Processing episode_file_data for quality: {episode_file_data}")
+
             custom_formats_list = episode_file_data.get('customFormats')
             custom_formats_str = ""
             if custom_formats_list and isinstance(custom_formats_list, list) and custom_formats_list:
@@ -334,27 +324,34 @@ async def sonarr_webhook():
 
             if isinstance(q_from_file_obj, str):
                 quality_string = q_from_file_obj
+                # Append custom formats if they were found at the episode_file_data level
                 quality_string += custom_formats_str
-            elif isinstance(q_from_file_obj, dict):
+            elif isinstance(q_from_file_obj, dict):  # Nested quality object
                 quality_details = q_from_file_obj
                 base_quality_info = quality_details.get('quality')
                 if base_quality_info and isinstance(base_quality_info, dict) and base_quality_info.get('name'):
                     quality_string = base_quality_info.get('name')
 
-                if not custom_formats_str:
+                # Use custom_formats_str if already populated from episode_file_data.customFormats
+                # Otherwise, check within the nested quality object
+                if not custom_formats_str:  # Check only if not already found
                     nested_custom_formats = quality_details.get(
                         'customFormats')
                     if nested_custom_formats and isinstance(nested_custom_formats, list) and nested_custom_formats:
                         custom_formats_str = f" ({', '.join(nested_custom_formats)})"
 
+                # Avoid "N/A (format)"
                 if quality_string != "N/A" or custom_formats_str:
                     if quality_string == "N/A" and custom_formats_str:
+                        # Use only custom formats if base quality is N/A and we have custom formats
                         quality_string = custom_formats_str.strip(" ()")
                     elif quality_string != "N/A":
                         quality_string += custom_formats_str
+            # This case handles if 'quality' field is missing but 'customFormats' are present at file level
             elif quality_string == "N/A" and custom_formats_str:
                 quality_string = custom_formats_str.strip(" ()")
 
+        # Fallback to release_data if quality is still "N/A"
         if quality_string == "N/A" and release_data and isinstance(release_data, dict):
             logger.debug(
                 "Falling back to release_data for quality information.")
@@ -367,10 +364,11 @@ async def sonarr_webhook():
                 cf_release_str = f" ({', '.join(custom_formats_from_release)})"
                 if quality_string != "N/A" and quality_string != "":
                     quality_string += cf_release_str
-                elif quality_string == "N/A" and cf_release_str:
+                elif quality_string == "N/A" and cf_release_str:  # only custom formats found in release
                     quality_string = cf_release_str.strip(" ()")
+        # --- End Corrected Quality Extraction Logic ---
 
-# --- Construct the Embed ---
+        # --- Construct the Embed ---
         embed_title = f"{series_title}"
         if series_year:
             embed_title += f" ({series_year})"
@@ -404,7 +402,9 @@ async def sonarr_webhook():
             except ValueError:
                 logger.warning(
                     f"Could not parse airDateUtc: {air_date_utc_str}")
-                embed.add_field(name="Air Date", value="N/A", inline=True)
+                # Add field with N/A only if airDateUtc was present but unparseable
+                embed.add_field(name="Air Date",
+                                value="N/A (unparseable)", inline=True)
         else:
             embed.add_field(name="Air Date", value="N/A", inline=True)
 
@@ -414,8 +414,9 @@ async def sonarr_webhook():
         series_images = series_data.get('images', [])
         poster_url = None
         for img in series_images:
-            if img.get('coverType') == 'poster' and img.get('remoteUrl'):
+            if img.get('coverType') == 'poster' and img.get('remoteUrl'):  # Sonarr v4 uses remoteUrl
                 poster_url = img.get('remoteUrl')
+            # Older Sonarr might use url
             elif img.get('coverType') == 'poster' and img.get('url'):
                 poster_url = img.get('url')
             if poster_url:
@@ -424,7 +425,7 @@ async def sonarr_webhook():
             embed.set_thumbnail(url=poster_url)
 
         fanart_url = None
-        for img in series_images:
+        for img in series_images:  # Check series images first
             if img.get('coverType') == 'fanart' and img.get('remoteUrl'):
                 fanart_url = img.get('remoteUrl')
             elif img.get('coverType') == 'fanart' and img.get('url'):
@@ -432,8 +433,9 @@ async def sonarr_webhook():
             if fanart_url:
                 break
 
+        # Sonarr v4 episode objects might have an 'images' array for screenshots
         episode_images = episode_data.get('images', [])
-        if episode_images:
+        if episode_images:  # Prefer episode image if available
             if episode_images[0].get('remoteUrl'):
                 fanart_url = episode_images[0].get('remoteUrl')
             elif episode_images[0].get('url'):
@@ -442,15 +444,18 @@ async def sonarr_webhook():
         if fanart_url:
             embed.set_image(url=fanart_url)
 
-        embed.timestamp = datetime.utcnow()
+        embed.timestamp = datetime.utcnow()  # Sets the footer timestamp
+
+        # --- End Embed Construction ---
 
         users_to_ping = get_discord_user_ids_for_tags(
+            # Ensure using tagsArray if that's what Sonarr sends
             series_data.get('tagsArray', []))
         mentions_text = " ".join(
             [f"<@{uid}>" for uid in users_to_ping]) if users_to_ping else ""
 
         series_id_for_dedupe = series_data.get('id')
-        # This should be episode_data.get('id')
+        # Corrected: this should be from episode_data
         episode_id_for_dedupe = episode_data.get('id')
         release_title_for_dedupe = release_data.get('releaseTitle')
         episode_unique_id = (series_id_for_dedupe,
@@ -492,7 +497,6 @@ async def sonarr_webhook():
         logger.info(
             f"Sonarr event type '{event_type}' is not explicitly handled. Ignoring.")
         return jsonify({"status": "ignored", "message": f"Event type '{event_type}' not handled"}), 200
-# --- Background Task for Overseerr User Sync ---
 
 
 async def start_overseerr_user_sync(bot_instance):
