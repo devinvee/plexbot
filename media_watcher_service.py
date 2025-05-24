@@ -312,26 +312,19 @@ async def sonarr_webhook():
             'overview', "No overview available.")
         air_date_utc_str = episode_data.get('airDateUtc')
 
-        # --- Corrected Quality Extraction Logic ---
         quality_string = "N/A"  # Initialize
 
-        # Sonarr v4 often uses episodeFiles (plural list) for Download/Import,
-        # while v3 might use episodeFile (singular). Let's check both.
-        # This is what your payload has
         episode_file_list = payload.get('episodeFiles')
         episode_file_data = None
 
         if episode_file_list and isinstance(episode_file_list, list) and len(episode_file_list) > 0:
-            episode_file_data = episode_file_list[0]  # Use the first file
-        elif payload.get('episodeFile'):  # Fallback for singular episodeFile object
+            episode_file_data = episode_file_list[0]
+        elif payload.get('episodeFile'):
             episode_file_data = payload.get('episodeFile')
 
         if episode_file_data and isinstance(episode_file_data, dict):
             logger.debug(
                 f"Processing episode_file_data for quality: {episode_file_data}")
-
-            # Attempt to get custom formats first, as they might exist alongside simple or nested quality
-            # Sonarr v4 can have this at the file level
             custom_formats_list = episode_file_data.get('customFormats')
             custom_formats_str = ""
             if custom_formats_list and isinstance(custom_formats_list, list) and custom_formats_list:
@@ -339,35 +332,29 @@ async def sonarr_webhook():
 
             q_from_file_obj = episode_file_data.get('quality')
 
-            # Direct string like "WEBDL-1080p" (as in your payload)
             if isinstance(q_from_file_obj, str):
                 quality_string = q_from_file_obj
-                quality_string += custom_formats_str  # Append custom formats if they exist
-            elif isinstance(q_from_file_obj, dict):  # Nested quality object
+                quality_string += custom_formats_str
+            elif isinstance(q_from_file_obj, dict):
                 quality_details = q_from_file_obj
                 base_quality_info = quality_details.get('quality')
                 if base_quality_info and isinstance(base_quality_info, dict) and base_quality_info.get('name'):
                     quality_string = base_quality_info.get('name')
 
-                # Custom formats from the nested quality object (if not already found directly on episode_file_data)
-                if not custom_formats_str:  # Only if we didn't get them from episode_file_data.customFormats
+                if not custom_formats_str:
                     nested_custom_formats = quality_details.get(
                         'customFormats')
                     if nested_custom_formats and isinstance(nested_custom_formats, list) and nested_custom_formats:
                         custom_formats_str = f" ({', '.join(nested_custom_formats)})"
 
-                # Avoid "N/A (format)"
                 if quality_string != "N/A" or custom_formats_str:
                     if quality_string == "N/A" and custom_formats_str:
-                        quality_string = custom_formats_str.strip(
-                            " ()")  # Use only custom if base is N/A
+                        quality_string = custom_formats_str.strip(" ()")
                     elif quality_string != "N/A":
                         quality_string += custom_formats_str
-            # Only custom formats found at file level, no 'quality' field
             elif quality_string == "N/A" and custom_formats_str:
                 quality_string = custom_formats_str.strip(" ()")
 
-        # Fallback to release_data if quality is still "N/A"
         if quality_string == "N/A" and release_data and isinstance(release_data, dict):
             logger.debug(
                 "Falling back to release_data for quality information.")
@@ -382,7 +369,6 @@ async def sonarr_webhook():
                     quality_string += cf_release_str
                 elif quality_string == "N/A" and cf_release_str:
                     quality_string = cf_release_str.strip(" ()")
-        # --- End Corrected Quality Extraction Logic ---
 
         # --- Construct the Embed ---
         embed_title = f"{series_title}"
