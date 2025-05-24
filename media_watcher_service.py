@@ -289,6 +289,20 @@ async def sonarr_webhook():
         # If multiple episodes can arrive in one webhook, you might loop or adjust
         episode_data = episodes_data[0]
 
+        series_title = series_data.get('title', "Unknown Series")elif event_type in ['Download', 'Episode Imported']:
+        series_data = payload.get('series', {})
+        episodes_data = payload.get('episodes', [])  # This is a list
+        # Still useful for some release info or fallback
+        release_data = payload.get('release', {})
+
+        if not series_data or not episodes_data:
+            logger.warning(
+                "Sonarr webhook missing series or episodes data for Download/Import.")
+            return jsonify({"status": "error", "message": "Missing series or episode data"}), 400
+
+        # Process the first episode in the list
+        episode_data = episodes_data[0]
+
         series_title = series_data.get('title', "Unknown Series")
         series_year = series_data.get('year')
         season_number = episode_data.get('seasonNumber', 0)
@@ -298,29 +312,62 @@ async def sonarr_webhook():
             'overview', "No overview available.")
         air_date_utc_str = episode_data.get('airDateUtc')
 
-        quality_string = "N/A"
-        # This is primary for imported files
-        episode_file_data = payload.get('episodeFile')
+        # --- Corrected Quality Extraction Logic ---
+        quality_string = "N/A"  # Initialize
+
+        # Sonarr v4 often uses episodeFiles (plural list) for Download/Import,
+        # while v3 might use episodeFile (singular). Let's check both.
+        # This is what your payload has
+        episode_file_list = payload.get('episodeFiles')
+        episode_file_data = None
+
+        if episode_file_list and isinstance(episode_file_list, list) and len(episode_file_list) > 0:
+            episode_file_data = episode_file_list[0]  # Use the first file
+        elif payload.get('episodeFile'):  # Fallback for singular episodeFile object
+            episode_file_data = payload.get('episodeFile')
 
         if episode_file_data and isinstance(episode_file_data, dict):
-            quality_details = episode_file_data.get('quality')
-            if quality_details and isinstance(quality_details, dict):
-                # Get the base quality name (e.g., "WEBDL-1080p")
+            logger.debug(
+                f"Processing episode_file_data for quality: {episode_file_data}")
+
+            # Attempt to get custom formats first, as they might exist alongside simple or nested quality
+            # Sonarr v4 can have this at the file level
+            custom_formats_list = episode_file_data.get('customFormats')
+            custom_formats_str = ""
+            if custom_formats_list and isinstance(custom_formats_list, list) and custom_formats_list:
+                custom_formats_str = f" ({', '.join(custom_formats_list)})"
+
+            q_from_file_obj = episode_file_data.get('quality')
+
+            # Direct string like "WEBDL-1080p" (as in your payload)
+            if isinstance(q_from_file_obj, str):
+                quality_string = q_from_file_obj
+                quality_string += custom_formats_str  # Append custom formats if they exist
+            elif isinstance(q_from_file_obj, dict):  # Nested quality object
+                quality_details = q_from_file_obj
                 base_quality_info = quality_details.get('quality')
-                if base_quality_info and isinstance(base_quality_info, dict):
-                    quality_string = base_quality_info.get('name', "N/A")
+                if base_quality_info and isinstance(base_quality_info, dict) and base_quality_info.get('name'):
+                    quality_string = base_quality_info.get('name')
 
-                # Get custom formats (Sonarr v4+)
-                custom_formats = quality_details.get('customFormats')
-                if custom_formats and isinstance(custom_formats, list) and custom_formats:
-                    custom_formats_str = ", ".join(custom_formats)
-                    if quality_string != "N/A" and quality_string != "":  # Check if quality_string is not "N/A" or empty
-                        quality_string += f" ({custom_formats_str})"
-                    else:  # If base quality was N/A, just use custom formats
-                        quality_string = custom_formats_str
+                # Custom formats from the nested quality object (if not already found directly on episode_file_data)
+                if not custom_formats_str:  # Only if we didn't get them from episode_file_data.customFormats
+                    nested_custom_formats = quality_details.get(
+                        'customFormats')
+                    if nested_custom_formats and isinstance(nested_custom_formats, list) and nested_custom_formats:
+                        custom_formats_str = f" ({', '.join(nested_custom_formats)})"
 
-        # Fallback to release_data if episodeFile info wasn't sufficient or present
-        # (e.g., for a pure "Grab" event if you notify on that, or if episodeFile lacks detail)
+                # Avoid "N/A (format)"
+                if quality_string != "N/A" or custom_formats_str:
+                    if quality_string == "N/A" and custom_formats_str:
+                        quality_string = custom_formats_str.strip(
+                            " ()")  # Use only custom if base is N/A
+                    elif quality_string != "N/A":
+                        quality_string += custom_formats_str
+            # Only custom formats found at file level, no 'quality' field
+            elif quality_string == "N/A" and custom_formats_str:
+                quality_string = custom_formats_str.strip(" ()")
+
+        # Fallback to release_data if quality is still "N/A"
         if quality_string == "N/A" and release_data and isinstance(release_data, dict):
             logger.debug(
                 "Falling back to release_data for quality information.")
@@ -328,15 +375,14 @@ async def sonarr_webhook():
             if quality_name_from_release:
                 quality_string = quality_name_from_release
 
-            # Sonarr v4 release object might also have customFormats
             custom_formats_from_release = release_data.get('customFormats')
             if custom_formats_from_release and isinstance(custom_formats_from_release, list) and custom_formats_from_release:
-                custom_formats_release_str = ", ".join(
-                    custom_formats_from_release)
+                cf_release_str = f" ({', '.join(custom_formats_from_release)})"
                 if quality_string != "N/A" and quality_string != "":
-                    quality_string += f" ({custom_formats_release_str})"
-                else:  # If base quality was N/A, just use custom formats
-                    quality_string = custom_formats_release_str
+                    quality_string += cf_release_str
+                elif quality_string == "N/A" and cf_release_str:
+                    quality_string = cf_release_str.strip(" ()")
+        # --- End Corrected Quality Extraction Logic ---
 
         # --- Construct the Embed ---
         embed_title = f"{series_title}"
@@ -346,7 +392,7 @@ async def sonarr_webhook():
 
         embed = discord.Embed(
             title=embed_title,
-            color=discord.Color.green()  # Green accent like the example
+            color=discord.Color.green()
         )
 
         if bot_instance.user and bot_instance.user.avatar:
@@ -377,7 +423,8 @@ async def sonarr_webhook():
         else:
             embed.add_field(name="Air Date", value="N/A", inline=True)
 
-        embed.add_field(name="Quality", value=quality, inline=True)
+        embed.add_field(
+            name="Quality", value=quality_string if quality_string else "N/A", inline=True)
 
         # Thumbnail (Series Poster)
         series_images = series_data.get('images', [])
