@@ -398,45 +398,88 @@ async def on_ready():
 # --- NEW: Event handler for role updates ---
 
 
+I'm sorry to hear the feature isn't working as expected. The fact that there's nothing in the logs is a key clue. It almost certainly means the on_member_update function isn't being called by Discord at all, or it's exiting before any of our log messages.
+
+The most common cause for this is a missing "Privileged Intent" setting in the Discord Developer Portal. Let's verify that first and add some extra logging to pinpoint the issue.
+1. (Most Likely Cause) Verify Discord Intents
+
+For the bot to be notified about member updates (like role changes), you must enable the "Server Members Intent" in your bot's application settings.
+
+    Go to the Discord Developer Portal.
+    Select your application.
+    Click on the "Bot" tab in the left-hand menu.
+    Scroll down to the "Privileged Gateway Intents" section.
+    Make sure the "SERVER MEMBERS INTENT" toggle is turned ON.
+
+If this was off, please turn it on and restart your bot. This alone will likely fix the issue.
+2. Add Diagnostic Logging
+
+If the intent was already enabled, let's add more detailed logging to your bot.py. This will help us see exactly what's happening when a user's roles are changed.
+
+Here is the updated on_member_update function with new diagnostic logs. Please replace the old function with this one.
+
+In bot.py, update the function:
+Python
+
+# In bot.py
+
+# ... (rest of your bot code) ...
+
+# --- Discord Bot Events ---
+
+# ... (on_ready event) ...
+
+# --- UPDATED: Event handler for role updates with extra logging ---
 @bot.event
 async def on_member_update(before, after):
     """
     Event that fires when a user's server profile is updated,
     including when they are assigned a new role.
     """
+    # --- NEW: Initial Diagnostic Log ---
+    # This will tell us if the event is firing at all.
+    logging.info(f"on_member_update event triggered for member: {after.display_name} (ID: {after.id})")
+    # --- END NEW ---
+
     # 1. Check if the feature is enabled and properly configured
     if not invite_feature_enabled:
+        # Added a debug log here to be extra clear
+        logging.debug("Invite feature is disabled in config. Exiting function.")
         return
     if not invite_role_id or not invite_link_to_send:
-        logging.warning(
-            "New user invite feature is enabled, but role_id or invite_link is missing from config.")
+        logging.warning("New user invite feature is enabled, but role_id or invite_link is missing from config.")
         return
+
+    # Log the roles before and after the change for debugging
+    logging.debug(f"Roles before for {after.display_name}: {[role.name for role in before.roles]}")
+    logging.debug(f"Roles after for {after.display_name}: {[role.name for role in after.roles]}")
 
     # 2. Check if roles have actually changed to avoid unnecessary processing
     if before.roles == after.roles:
+        logging.debug(f"No role change detected for {after.display_name}. Exiting function.")
         return
 
     # 3. Get the specific role object from the server
     try:
-        # The role ID from config might be a string, convert to int
         target_role_id = int(invite_role_id)
         target_role = after.guild.get_role(target_role_id)
     except (ValueError, TypeError):
-        logging.error(
-            f"Invalid 'role_id' for new user invite feature: {invite_role_id}. It must be a valid integer.")
-        return  # Stop if the role_id is invalid
+        logging.error(f"Invalid 'role_id' for new user invite feature: {invite_role_id}. It must be a valid integer.")
+        return
 
     if not target_role:
-        logging.warning(
-            f"Could not find the role with ID {invite_role_id} in the server '{after.guild.name}'.")
-        return  # Stop if the role doesn't exist
+        logging.warning(f"Could not find the role with ID {invite_role_id} in the server '{after.guild.name}'.")
+        return
 
     # 4. Check if the target role was ADDED in this update
     was_added = target_role not in before.roles and target_role in after.roles
 
+    # --- NEW: Added a log to show the result of the check ---
+    logging.info(f"Checking if role '{target_role.name}' was added to {after.display_name}... Result: {was_added}")
+    # --- END NEW ---
+
     if was_added:
-        logging.info(
-            f"User '{after.display_name}' was assigned the role '{target_role.name}'. Preparing to send invite DM.")
+        logging.info(f"User '{after.display_name}' was assigned the role '{target_role.name}'. Preparing to send invite DM.")
 
         # 5. Construct and send the direct message
         message = (
@@ -447,15 +490,12 @@ async def on_member_update(before, after):
 
         try:
             await after.send(message)
-            logging.info(
-                f"Successfully sent invite DM to '{after.display_name}'.")
+            logging.info(f"Successfully sent invite DM to '{after.display_name}'.")
         except discord.Forbidden:
-            logging.warning(
-                f"Could not send DM to '{after.display_name}'. They may have DMs disabled.")
+            logging.warning(f"Could not send DM to '{after.display_name}'. They may have DMs disabled.")
         except Exception as e:
-            logging.error(
-                f"An unexpected error occurred while sending DM to '{after.display_name}': {e}", exc_info=True)
-# --- END NEW ---
+            logging.error(f"An unexpected error occurred while sending DM to '{after.display_name}': {e}", exc_info=True)
+
 
 
 @bot.event
