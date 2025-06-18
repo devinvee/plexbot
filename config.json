@@ -3,6 +3,16 @@
 		"notification_channel_id": "${DISCORD_CHANNEL_ID}",
 		"dm_notifications_enabled": true
 	},
+	"new_user_invite": {
+		"enabled": true,
+		"role_id": "${NEW_USER_ROLE_ID}",
+		"invite_link": "${INVITE_LINK}"
+	},
+	"overseerr": {
+		"base_url": "${OVERSEERR_BASE_URL}",
+		"api_key": "${OVERSEERR_API_KEY}",
+		"refresh_interval_minutes": 60
+	},
 	"overseerr": {
 		"base_url": "${OVERSEERR_BASE_URL}",
 		"api_key": "${OVERSEERR_API_KEY}",

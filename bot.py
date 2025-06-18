@@ -35,6 +35,13 @@ except (FileNotFoundError, json.JSONDecodeError) as e:
         f"Error loading configuration from '{CONFIG_FILE}': {e}. Exiting.")
     exit(1)
 
+# --- NEW: Load New User Invite Configuration ---
+new_user_invite_config = config.get("new_user_invite", {})
+invite_feature_enabled = new_user_invite_config.get("enabled", False)
+invite_role_id = new_user_invite_config.get("role_id")
+invite_link_to_send = new_user_invite_config.get("invite_link")
+# --- END NEW ---
+
 # --- Logging Setup (MOVED AND MODIFIED) ---
 # 1. Get the desired log level from config.json, defaulting to INFO if not found
 configured_log_level_str = config.get("log_level", "INFO").upper()
@@ -134,6 +141,7 @@ logging.getLogger('werkzeug').setLevel(logging.WARNING)
 intents = discord.Intents.default()
 # Required for reading message content if you have text commands
 intents.message_content = True
+intents.members = True  # <-- IMPORTANT: Enable the members intent
 bot = commands.Bot(command_prefix="/", intents=intents)
 
 # --- Docker Interaction Helper (Optional, but useful for avoiding repetitive code) ---
@@ -386,6 +394,68 @@ async def on_ready():
     await setup_media_watcher_service(bot)
     logging.info("Media Watcher Service setup initiated.")
     # --- END NEW ---
+
+# --- NEW: Event handler for role updates ---
+
+
+@bot.event
+async def on_member_update(before, after):
+    """
+    Event that fires when a user's server profile is updated,
+    including when they are assigned a new role.
+    """
+    # 1. Check if the feature is enabled and properly configured
+    if not invite_feature_enabled:
+        return
+    if not invite_role_id or not invite_link_to_send:
+        logging.warning(
+            "New user invite feature is enabled, but role_id or invite_link is missing from config.")
+        return
+
+    # 2. Check if roles have actually changed to avoid unnecessary processing
+    if before.roles == after.roles:
+        return
+
+    # 3. Get the specific role object from the server
+    try:
+        # The role ID from config might be a string, convert to int
+        target_role_id = int(invite_role_id)
+        target_role = after.guild.get_role(target_role_id)
+    except (ValueError, TypeError):
+        logging.error(
+            f"Invalid 'role_id' for new user invite feature: {invite_role_id}. It must be a valid integer.")
+        return  # Stop if the role_id is invalid
+
+    if not target_role:
+        logging.warning(
+            f"Could not find the role with ID {invite_role_id} in the server '{after.guild.name}'.")
+        return  # Stop if the role doesn't exist
+
+    # 4. Check if the target role was ADDED in this update
+    was_added = target_role not in before.roles and target_role in after.roles
+
+    if was_added:
+        logging.info(
+            f"User '{after.display_name}' was assigned the role '{target_role.name}'. Preparing to send invite DM.")
+
+        # 5. Construct and send the direct message
+        message = (
+            f"Hello {after.display_name}!\n\n"
+            f"Welcome! As you've been assigned the '{target_role.name}' role, here is your special invite link:\n"
+            f"{invite_link_to_send}"
+        )
+
+        try:
+            await after.send(message)
+            logging.info(
+                f"Successfully sent invite DM to '{after.display_name}'.")
+        except discord.Forbidden:
+            logging.warning(
+                f"Could not send DM to '{after.display_name}'. They may have DMs disabled.")
+        except Exception as e:
+            logging.error(
+                f"An unexpected error occurred while sending DM to '{after.display_name}': {e}", exc_info=True)
+# --- END NEW ---
 
 
 @bot.event
