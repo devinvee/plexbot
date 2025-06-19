@@ -8,7 +8,7 @@ WORKDIR /app
 COPY requirements.txt .
 
 # Install any needed packages specified in requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt # <--- FIX IS HERE
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy all Python files (*.py) from your repo root to /app in container
 COPY *.py .
