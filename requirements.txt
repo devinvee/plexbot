@@ -3,7 +3,7 @@ requests
 paramiko
 asyncio
 requests
-python-dotenv
+dotenv
 Flask[async]
 docker
-python-plexapi
+plexapi

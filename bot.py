@@ -6,6 +6,8 @@ import discord
 from discord.ext import commands, tasks
 from datetime import datetime, timedelta, timezone
 import requests
+from plexapi.server import PlexServer
+from plexapi.myplex import MyPlexAccount
 from utils import load_config
 from media_watcher_service import setup_media_watcher_service
 
@@ -15,6 +17,8 @@ except ImportError:
     logging.error(
         "The 'docker' library is not installed. Docker commands will not work.")
     docker = None
+
+TEST_GUILD = discord.Object(id=882461504962703381)
 
 # --- Configuration Loading ---
 CONFIG_FILE = "config.json"
@@ -123,7 +127,42 @@ def _get_docker_client():
             f"Could not connect to Docker daemon: {e}. Is Docker running and socket mounted correctly?")
         return None
 
+
+class LibrarySelectView(discord.ui.View):
+    def __init__(self, libraries):
+        super().__init__(timeout=300)
+
+        select_options = [
+            discord.SelectOption(label=lib.title) for lib in libraries
+        ]
+
+        self.add_item(discord.ui.Select(
+            placeholder="Choose the libraries you're interested in...",
+            options=select_options,
+            min_values=1,
+            max_values=len(libraries),
+            custom_id="library_select"
+        ))
+
+    @discord.ui.select(custom_id="library_select")
+    async def select_callback(self, interaction: discord.Interaction, select: discord.ui.Select):
+        selected_libraries = select.values
+
+        await interaction.response.send_message(f"Thanks! I've noted your interest in: **{', '.join(selected_libraries)}**.", ephemeral=True)
+
 # --- Discord Bot Commands ---
+
+
+@bot.command()
+@commands.is_owner()
+async def sync(ctx: commands.Context):
+    """Manually syncs slash commands to the current guild."""
+    try:
+        await ctx.send(f"Attempting to sync commands to this server...")
+        synced = await bot.tree.sync(guild=ctx.guild)
+        await ctx.send(f"✅ Successfully synced **{len(synced)}** commands.")
+    except Exception as e:
+        await ctx.send(f"❌ Failed to sync commands: {e}")
 
 
 @bot.tree.command(name="plexstatus", description="Check Plex Docker container status.")
@@ -182,9 +221,33 @@ async def restart_containers_command(interaction: discord.Interaction):
     await interaction.followup.send("✨ All specified containers processed.")
 
 
-@bot.tree.command(name="plexaccess", description="Request Plex Access.")
-async def request_plex_access_command(interation: discord.Interaction):
-    await interation.response.defer(ephemeral=False)
+# ---- Currently broken plexaccess command allowing users to select which libraries they want to receive access to ---
+# @bot.tree.command(name="plexaccess", description="Select which Plex libraries you are interested in.")
+# async def plexaccess_command(interaction: discord.Interaction):
+#     await interaction.response.defer(ephemeral=False)
+#     try:
+
+#         plex_url = os.getenv("PLEX_URL")
+#         plex_token = os.getenv("PLEX_TOKEN")
+
+#         if not plex_url or not plex_token:
+#             await interaction.followup.send("Plex server is not configured. Please contact the admin.")
+#             return
+
+#         account = MyPlexAccount(token=plex_token)
+#         plex = PlexServer(plex_url, account.authenticationToken)
+#         libraries = plex.library.sections()
+
+#         view = LibrarySelectView(libraries)
+
+#         await interaction.followup.send(
+#             "Awesome! So you'd like Plex access? Which libraries are you interested in?",
+#             view=view
+#         )
+
+#     except Exception as e:
+#         logging.error(f"Failed to execute /plexaccess command: {e}")
+#         await interaction.followup.send(f"An error occurred while fetching Plex libraries: {e}")
 
 
 @bot.tree.command(name="restartplex", description="Restart Plex container.")
@@ -212,6 +275,8 @@ async def restart_plex_command(interaction: discord.Interaction):
         logging.error(f"Error restarting Plex: {e}")
         await interaction.followup.send(f"An unexpected error occurred: {e}", ephemeral=True)
 
+# --- Message handler for /realdebrid ---
+
 
 @bot.tree.command(name="realdebrid", description="Check your Real-Debrid account status.")
 async def realdebrid_status_command(interaction: discord.Interaction):
@@ -230,33 +295,43 @@ async def realdebrid_status_command(interaction: discord.Interaction):
         response.raise_for_status()
         user_info = response.json()
 
-        premium_status = "Premium" if user_info.get("type") == 1 else "Free"
+        premium_status = "Premium" if user_info.get(
+            "type") == "premium" else "Free"
         email = user_info.get("email")
 
-        premium_expires_str = user_info.get("premium_expire")
+        premium_expires_str = user_info.get("expiration")
         if premium_expires_str:
             if premium_expires_str.endswith('Z'):
                 premium_expires_str = premium_expires_str[:-1] + '+00:00'
 
             premium_expires_dt = datetime.fromisoformat(premium_expires_str)
+            logging.debug(
+                f"premium expiration date return value: {premium_expires_dt}")
 
             now_utc = datetime.now(timezone.utc)
+            logging.debug(f"Current date and time in UTC: {now_utc}")
             days_left = (premium_expires_dt - now_utc).days
+            logging.debug(f"Days left: {days_left}")
 
             formatted_expiry_date = premium_expires_dt.strftime("%B %d, %Y")
+            logging.debug(f"Formatted expiry date: {formatted_expiry_date}")
 
             if days_left >= 0:
                 expiry_message = f"Expires in `{days_left}` days (on `{formatted_expiry_date}`)."
+                logging.info(f"Your account expires in {days_left} days.")
             else:
                 expiry_message = f"Expired `{-days_left}` days ago (on `{formatted_expiry_date}`)."
+                logging.warning(f"Your account is expired!")
         else:
             expiry_message = "No expiry date found."
+            logging.debug(
+                f"expiry string value: {premium_expires_str}. No expiry date found here.")
 
         message = (
             f"**Real-Debrid Account Status:**\n"
             f"📧 Email: `{email}`\n"
             f"✨ Status: `{premium_status}`\n"
-            f"🗓️ {expiry_message}"
+            f"🗓️ {expiry_message}\n"
         )
         await interaction.followup.send(message, ephemeral=False)
 
@@ -320,16 +395,14 @@ async def check_premium_expiry():
 async def on_ready():
     """Event that fires when the bot is ready and connected to Discord."""
     logging.info(f"Logged in as {bot.user} (ID: {bot.user.id})")
-    print(f"Logged in as {bot.user} (ID: {bot.user.id})")
 
     try:
-        synced = await bot.tree.sync()  # Syncs globally
+        synced = await bot.tree.sync(guild=TEST_GUILD)
 
-        logging.info(f"Synced {len(synced)} command(s) globally.")
-        print(f"Synced {len(synced)} command(s) globally.")
+        logging.info(
+            f"Synced {len(synced)} command(s) to guild {TEST_GUILD.id}.")
     except Exception as e:
         logging.error(f"Failed to sync commands: {e}")
-        print(f"Failed to sync commands: {e}")
 
     startup_channel = None
     if CHANNEL_ID_INT:
@@ -353,6 +426,8 @@ async def on_ready():
 
 
 # --- Event handler for role updates ---
+
+
 @bot.event
 async def on_member_update(before, after):
     """
