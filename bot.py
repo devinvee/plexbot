@@ -175,7 +175,7 @@ async def plex_status_command(interaction: discord.Interaction):
         return
 
     try:
-        plex_container = client.containers.get("Plex")
+        plex_container = client.containers.get("plex")
         status = plex_container.status
         await interaction.followup.send(f"🎬 Plex container status: `{status}`")
     except docker.errors.NotFound:
