@@ -198,7 +198,7 @@ async def restart_containers_command(interaction: discord.Interaction):
         "qbittorrent",
         "sonarr",
         "radarr",
-        "Plex"
+        "plex"
     ]
 
     await interaction.followup.send("🔄 Attempting to restart specified containers in order...", ephemeral=False)
@@ -260,7 +260,7 @@ async def restart_plex_command(interaction: discord.Interaction):
         return
 
     try:
-        plex_container = client.containers.get("Plex")
+        plex_container = client.containers.get("plex")
 
         await interaction.followup.send("🔄 Restarting Plex container...", ephemeral=False)
         plex_container.restart(timeout=30)
