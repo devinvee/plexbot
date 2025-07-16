@@ -163,3 +163,7 @@ cython_debug/
 .json
 docker-compose.override.yml
 .vscode/
+/ts-plexbot/state
+/ts-plexbot
+/ts-plexbot
+ts-plexbot/state/tailscaled.log1.txt
