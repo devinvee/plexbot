@@ -1,6 +1,7 @@
 {
 	"discord": {
-		"notification_channel_id": "${DISCORD_CHANNEL_ID}",
+		"sonarr_notification_channel_id": "${SONARR_CHANNEL_ID}",
+		"radarr_notification_channel_id": "${RADARR_CHANNEL_ID}",
 		"dm_notifications_enabled": false
 	},
 	"new_user_invite": {

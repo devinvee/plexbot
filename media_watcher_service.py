@@ -60,23 +60,49 @@ OVERSEERR_CONFIG = config.get("overseerr", {})
 SONARR_INSTANCES = config.get("sonarr_instances", [])
 USER_MAPPINGS = config.get("user_mappings", {}).get("plex_to_discord", {})
 
-NOTIFICATION_CHANNEL_ID = DISCORD_CONFIG.get("notification_channel_id")
+SONARR_NOTIFICATION_CHANNEL_ID = DISCORD_CONFIG.get(
+    "sonarr_notification_channel_id")
+RADARR_NOTIFICATION_CHANNEL_ID = DISCORD_CONFIG.get(
+    "radarr_notification_channel_id")
 DM_NOTIFICATIONS_ENABLED = DISCORD_CONFIG.get("dm_notifications_enabled", True)
 
-if not NOTIFICATION_CHANNEL_ID:
+if not SONARR_NOTIFICATION_CHANNEL_ID:
     logger.warning(
-        "Discord notification_channel_id not set in config.json. Only DMs (if enabled) will work.")
+        "sonarr_notification_channel_id not set in config.json. Only DMs (if enabled) will work.")
+
+if not RADARR_NOTIFICATION_CHANNEL_ID:
+    logger.warning(
+        "radarr_notification_channel_id not set in config.json. Only DMs (if enabled) will work.")
 
 # --- Global State for User Data and De-duplication ---
 OVERSEERR_USERS_DATA = {}
 NOTIFIED_EPISODES_CACHE = deque(maxlen=1000)
+NOTIFIED_MOVIES_CACHE = deque(maxlen=1000)
 
 app = Flask(__name__)
 
 # --- Helper Functions ---
 
 
-async def _process_and_send_buffered_notifications(series_id, bot_instance):
+def get_requesting_user_from_tags(media_tags: list) -> str:
+    """
+    Finds the first username in the media tags that matches a known user.
+    """
+    if not media_tags:
+        return "N/A"
+
+    normalized_media_tags = [str(tag).lower() for tag in media_tags]
+
+    # Iterate through known users from your config's plex_to_discord mapping
+    for plex_user_norm, discord_id in USER_MAPPINGS.items():
+        # Check if the user's normalized name exists in any of the tags
+        if any(plex_user_norm in tag for tag in normalized_media_tags):
+            return plex_user_norm  # Return the first username that matches
+
+    return "N/A"
+
+
+async def _process_and_send_buffered_notifications(series_id, bot_instance, channel_id):
     logger.info(
         f"Timer expired for series ID {series_id}. Processing buffered notifications.")
 
@@ -262,7 +288,7 @@ async def _process_and_send_buffered_notifications(series_id, bot_instance):
             bot_instance=bot_instance,
             user_ids=users_to_ping,
             message_content=mentions_text,
-            channel_id=NOTIFICATION_CHANNEL_ID,
+            channel_id=channel_id,
             embed=final_embed
         )
         logger.info(
@@ -429,9 +455,113 @@ async def send_discord_notification(bot_instance, user_ids: set, message_content
 # --- Webhook Endpoints ---
 
 
-# Add near the top of media_watcher_service.py if not already there
+# --- Detailed Radarr Webhook Route ---
 
-# ... (other parts of your media_watcher_service.py file) ...
+# --- Detailed Radarr Webhook Route (Corrected) ---
+
+@app.route('/webhook/radarr', methods=['POST'])
+async def radarr_webhook_detailed():
+    payload = request.json
+    logger.info(
+        f"Received DETAILED Radarr webhook: {payload.get('eventType')} from {request.remote_addr}")
+    logger.debug(f"Radarr webhook payload: {json.dumps(payload, indent=2)}")
+
+    event_type = payload.get('eventType')
+    bot_instance = app.config.get('discord_bot')
+
+    if not bot_instance:
+        logger.error("Discord bot instance not found. Cannot process webhook.")
+        return jsonify({"status": "error", "message": "Bot instance not configured"}), 500
+
+    if event_type not in ['Download', 'Grab']:
+        return jsonify({"status": "ignored", "message": f"Event type '{event_type}' not handled"}), 200
+
+    movie_data = payload.get('movie', {})
+    release_data = payload.get('release', {})
+
+    if not movie_data:
+        logger.warning("Radarr webhook missing movie data.")
+        return jsonify({"status": "error", "message": "Missing movie data"}), 400
+
+    movie_id = movie_data.get('id')
+    release_title = release_data.get('releaseTitle', '')
+    unique_key = (movie_id, release_title, 'detailed')
+
+    if unique_key in NOTIFIED_MOVIES_CACHE:
+        logger.info(
+            f"Detailed notification for movie event (key: {unique_key}) already sent. Skipping.")
+        return jsonify({"status": "ignored", "message": "Duplicate event"}), 200
+
+    NOTIFIED_MOVIES_CACHE.append(unique_key)
+
+    movie_title = movie_data.get('title', 'N/A')
+    year = movie_data.get('year', 'N/A')
+    overview = movie_data.get('overview', 'No overview available.')
+    quality = release_data.get('quality', 'N/A')
+    certification = movie_data.get('certification', 'N/A')
+    runtime_min = movie_data.get('runtime', 0)
+
+    hours, minutes = divmod(runtime_min, 60)
+    runtime_formatted = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+
+    embed = discord.Embed(
+        title=f"{movie_title} ({year})",
+        description=overview,
+        color=0x00A67E
+    )
+
+    # --- CORRECTED LINE IS HERE ---
+    # We now check if bot_instance.user AND bot_instance.user.avatar exist before getting the URL.
+    icon_url = bot_instance.user.avatar.url if bot_instance.user and bot_instance.user.avatar else None
+    embed.set_author(name="Movie is ready! ✅", icon_url=icon_url)
+
+    poster_url = next((img.get('remoteUrl') for img in movie_data.get(
+        'images', []) if img.get('coverType') == 'poster'), None)
+    if poster_url:
+        embed.set_thumbnail(url=poster_url)
+
+    fanart_url = next((img.get('remoteUrl') for img in movie_data.get(
+        'images', []) if img.get('coverType') == 'fanart'), None)
+    if fanart_url:
+        embed.set_image(url=fanart_url)
+
+    embed.add_field(name="Rating", value=certification, inline=True)
+    embed.add_field(name="Quality", value=quality, inline=True)
+    embed.add_field(name="Runtime", value=runtime_formatted, inline=True)
+
+    ratings = movie_data.get('ratings', {})
+    tmdb_rating = ratings.get('tmdb', {}).get('value', 0)
+    imdb_rating = ratings.get('imdb', {}).get('value', 0)
+    ratings_text = f"TMDB: {tmdb_rating}/10 • IMDb: {imdb_rating}/10"
+    embed.add_field(name="Ratings", value=ratings_text, inline=False)
+
+    embed.add_field(name="Release", value=f"`{release_title}`", inline=False)
+
+    user_tags = movie_data.get('tags', [])
+    user_ids_to_notify = get_discord_user_ids_for_tags(user_tags)
+    requesting_user = get_requesting_user_from_tags(user_tags)
+    mentions_text = " ".join(
+        [f"<@{uid}>" for uid in user_ids_to_notify]) if user_ids_to_notify else None
+
+    if requesting_user != "N/A":
+        embed.add_field(name="Requested By",
+                        value=requesting_user, inline=False)
+
+    embed.timestamp = datetime.utcnow()
+
+    logger.info(f"Sending notification for {movie_title}...")
+    asyncio.run_coroutine_threadsafe(
+        send_discord_notification(
+            bot_instance=bot_instance,
+            user_ids=user_ids_to_notify,
+            message_content=mentions_text,
+            channel_id=RADARR_NOTIFICATION_CHANNEL_ID,
+            embed=embed
+        ),
+        bot_instance.loop
+    )
+
+    return jsonify({"status": "success", "message": "Detailed notification sent"}), 200
 
 
 @app.route('/webhook/sonarr', methods=['POST'])
@@ -463,14 +593,14 @@ async def sonarr_webhook():
                              icon_url=bot_instance.user.avatar.url)
         else:
             embed.set_author(name="Plexbot Notification Service")
-        embed.timestamp = datetime.utcnow()
+        embed.timestamp = datetime.now()
 
-        if NOTIFICATION_CHANNEL_ID:
+        if SONARR_NOTIFICATION_CHANNEL_ID:
             coro = send_discord_notification(
                 bot_instance=bot_instance,
                 user_ids=set(),
                 message_content=None,  # No pings for a test message
-                channel_id=NOTIFICATION_CHANNEL_ID,
+                channel_id=SONARR_NOTIFICATION_CHANNEL_ID,
                 embed=embed
             )
             future = asyncio.run_coroutine_threadsafe(coro, bot_instance.loop)
@@ -485,7 +615,7 @@ async def sonarr_webhook():
                     f"Error running Sonarr Test Discord notification: {e}", exc_info=True)
         else:
             logger.warning(
-                "Discord notification_channel_id not set; cannot send Sonarr Test notification.")
+                "Discord sonarr_notification_channel_id not set; cannot send Sonarr Test notification.")
 
         return jsonify({"status": "success", "message": "Test webhook processed successfully"}), 200
 
@@ -577,7 +707,8 @@ async def sonarr_webhook():
             timer_handle = loop.call_later(
                 DEBOUNCE_SECONDS,
                 lambda s_id=series_id, b_inst=bot_instance: asyncio.run_coroutine_threadsafe(
-                    _process_and_send_buffered_notifications(s_id, b_inst),
+                    _process_and_send_buffered_notifications(
+                        s_id, b_inst, SONARR_NOTIFICATION_CHANNEL_ID),
                     loop
                 )
             )
