@@ -47,5 +47,8 @@
 			"jakejakoby": "198614767739338752"
 		}
 	},
+	"tmdb": {
+		"api_key": "${TMDB_API_KEY}"
+	},
 	"log_level": "${LOG_LEVEL}"
 }

@@ -84,6 +84,32 @@ app = Flask(__name__)
 # --- Helper Functions ---
 
 
+async def fetch_tmdb_movie_details(tmdb_id: int, api_key: str) -> dict:
+    """
+    Fetches detailed movie information from the TMDB API, including videos and release dates.
+    """
+    if not api_key:
+        logger.warning("TMDB API key is not configured. Skipping TMDB fetch.")
+        return {}
+
+    # **CHANGE**: Added 'release_dates' to get MPAA rating (certification)
+    url = f"https://api.themoviedb.org/3/movie/{tmdb_id}?append_to_response=videos,release_dates"
+    headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {api_key}"
+    }
+
+    try:
+        response = await asyncio.to_thread(requests.get, url, headers=headers, timeout=10)
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        logger.error(
+            f"Error fetching details from TMDB for movie {tmdb_id}: {e}")
+
+    return {}
+
+
 def get_requesting_user_from_tags(media_tags: list) -> str:
     """
     Finds the first username in the media tags that matches a known user.
@@ -455,87 +481,116 @@ async def send_discord_notification(bot_instance, user_ids: set, message_content
 # --- Webhook Endpoints ---
 
 
-# --- Detailed Radarr Webhook Route ---
-
-# --- Detailed Radarr Webhook Route (Corrected) ---
-
 @app.route('/webhook/radarr', methods=['POST'])
 async def radarr_webhook_detailed():
     payload = request.json
     logger.info(
         f"Received DETAILED Radarr webhook: {payload.get('eventType')} from {request.remote_addr}")
-    logger.debug(f"Radarr webhook payload: {json.dumps(payload, indent=2)}")
-
-    event_type = payload.get('eventType')
     bot_instance = app.config.get('discord_bot')
+    tmdb_api_key = config.get("tmdb", {}).get("api_key")
 
     if not bot_instance:
-        logger.error("Discord bot instance not found. Cannot process webhook.")
+        logger.error("Discord bot instance not found.")
         return jsonify({"status": "error", "message": "Bot instance not configured"}), 500
 
+    event_type = payload.get('eventType')
     if event_type not in ['Download', 'Grab']:
-        return jsonify({"status": "ignored", "message": f"Event type '{event_type}' not handled"}), 200
+        return jsonify({"status": "ignored", "message": "Event type not handled"}), 200
 
     movie_data = payload.get('movie', {})
-    release_data = payload.get('release', {})
+    movie_file_data = payload.get('movieFile', {})
+    if not movie_data or not movie_file_data:
+        return jsonify({"status": "error", "message": "Missing movie or movieFile data"}), 400
 
-    if not movie_data:
-        logger.warning("Radarr webhook missing movie data.")
-        return jsonify({"status": "error", "message": "Missing movie data"}), 400
-
-    movie_id = movie_data.get('id')
-    release_title = release_data.get('releaseTitle', '')
-    unique_key = (movie_id, release_title, 'detailed')
+    tmdb_id = movie_data.get('tmdbId')
+    release_identifier = movie_file_data.get(
+        'sceneName') or movie_file_data.get('relativePath', '')
+    unique_key = (tmdb_id, release_identifier, 'detailed')
 
     if unique_key in NOTIFIED_MOVIES_CACHE:
-        logger.info(
-            f"Detailed notification for movie event (key: {unique_key}) already sent. Skipping.")
+        logger.info(f"Notification for {unique_key} already sent. Skipping.")
         return jsonify({"status": "ignored", "message": "Duplicate event"}), 200
-
     NOTIFIED_MOVIES_CACHE.append(unique_key)
 
-    movie_title = movie_data.get('title', 'N/A')
+    # --- Fetch ALL Details from TMDB ---
+    tmdb_details = await fetch_tmdb_movie_details(tmdb_id, tmdb_api_key)
+
+    # --- Data Extraction (TMDB is the primary source) ---
+    movie_title = tmdb_details.get('title') or movie_data.get('title', 'N/A')
     year = movie_data.get('year', 'N/A')
-    overview = movie_data.get('overview', 'No overview available.')
-    quality = release_data.get('quality', 'N/A')
-    certification = movie_data.get('certification', 'N/A')
-    runtime_min = movie_data.get('runtime', 0)
+    overview = tmdb_details.get('overview') or movie_data.get(
+        'overview', 'No overview available.')
 
-    hours, minutes = divmod(runtime_min, 60)
-    runtime_formatted = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+    # --- Data from Radarr (for file-specific info) ---
+    quality = movie_file_data.get('quality', 'N/A')
 
+    # --- Build the Embed ---
     embed = discord.Embed(
         title=f"{movie_title} ({year})",
         description=overview,
         color=0x00A67E
     )
-
-    # --- CORRECTED LINE IS HERE ---
-    # We now check if bot_instance.user AND bot_instance.user.avatar exist before getting the URL.
     icon_url = bot_instance.user.avatar.url if bot_instance.user and bot_instance.user.avatar else None
     embed.set_author(name="Movie is ready! ✅", icon_url=icon_url)
 
-    poster_url = next((img.get('remoteUrl') for img in movie_data.get(
-        'images', []) if img.get('coverType') == 'poster'), None)
-    if poster_url:
-        embed.set_thumbnail(url=poster_url)
+    poster_path = tmdb_details.get('poster_path')
+    if poster_path:
+        embed.set_thumbnail(
+            url=f"https://image.tmdb.org/t/p/w500{poster_path}")
 
-    fanart_url = next((img.get('remoteUrl') for img in movie_data.get(
-        'images', []) if img.get('coverType') == 'fanart'), None)
-    if fanart_url:
-        embed.set_image(url=fanart_url)
+    backdrop_path = tmdb_details.get('backdrop_path')
+    if backdrop_path:
+        embed.set_image(url=f"https://image.tmdb.org/t/p/w1280{backdrop_path}")
 
-    embed.add_field(name="Rating", value=certification, inline=True)
+    # --- Conditionally Build Embed Fields using TMDB Data ---
+
+    # Find US certification (MPAA rating) from the release_dates
+    certification = 'N/A'
+    if 'release_dates' in tmdb_details:
+        for country in tmdb_details['release_dates']['results']:
+            if country['iso_3166_1'] == 'US':
+                # Find the first certification that is not empty
+                cert_obj = next(
+                    (rd for rd in country['release_dates'] if rd['certification']), None)
+                if cert_obj:
+                    certification = cert_obj['certification']
+                    break
+
+    runtime_min = tmdb_details.get('runtime', 0)
+
+    # Combine ratings
+    tmdb_vote = tmdb_details.get('vote_average', 0)
+    # Get IMDb rating from Radarr's payload as TMDB doesn't provide it directly
+    imdb_rating = movie_data.get('ratings', {}).get('imdb', {}).get('value', 0)
+
+    # --- Add Fields to Embed ---
+    if certification and certification != 'N/A':
+        embed.add_field(name="Rating", value=certification, inline=True)
+
     embed.add_field(name="Quality", value=quality, inline=True)
-    embed.add_field(name="Runtime", value=runtime_formatted, inline=True)
 
-    ratings = movie_data.get('ratings', {})
-    tmdb_rating = ratings.get('tmdb', {}).get('value', 0)
-    imdb_rating = ratings.get('imdb', {}).get('value', 0)
-    ratings_text = f"TMDB: {tmdb_rating}/10 • IMDb: {imdb_rating}/10"
-    embed.add_field(name="Ratings", value=ratings_text, inline=False)
+    if runtime_min > 0:
+        hours, minutes = divmod(runtime_min, 60)
+        runtime_formatted = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+        embed.add_field(name="Runtime", value=runtime_formatted, inline=True)
 
-    embed.add_field(name="Release", value=f"`{release_title}`", inline=False)
+    if tmdb_vote > 0 or imdb_rating > 0:
+        ratings_parts = []
+        if tmdb_vote > 0:
+            ratings_parts.append(f"TMDB: {tmdb_vote:.1f}/10")
+        if imdb_rating > 0:
+            ratings_parts.append(f"IMDb: {imdb_rating}/10")
+        embed.add_field(name="Ratings", value=" • ".join(
+            ratings_parts), inline=False)
+
+    # Add Trailer
+    videos = tmdb_details.get('videos', {}).get('results', [])
+    trailer = next((v for v in videos if v.get('site') ==
+                   'YouTube' and v.get('type') == 'Trailer'), None)
+    if trailer and trailer.get('key'):
+        trailer_url = f"https://www.youtube.com/watch?v={trailer['key']}"
+        embed.add_field(
+            name="Trailer", value=f"[Watch on YouTube]({trailer_url})", inline=False)
 
     user_tags = movie_data.get('tags', [])
     user_ids_to_notify = get_discord_user_ids_for_tags(user_tags)
@@ -549,7 +604,7 @@ async def radarr_webhook_detailed():
 
     embed.timestamp = datetime.utcnow()
 
-    logger.info(f"Sending notification for {movie_title}...")
+    logger.info(f"Sending TMDB-enriched notification for {movie_title}...")
     asyncio.run_coroutine_threadsafe(
         send_discord_notification(
             bot_instance=bot_instance,
@@ -622,7 +677,6 @@ async def sonarr_webhook():
     elif event_type in ['Download', 'Episode Imported']:
         series_data_from_payload = payload.get('series', {})
         episodes_payload_list = payload.get('episodes', [])
-        release_data_from_payload = payload.get('release', {})
 
         all_episode_files_from_payload = payload.get('episodeFiles', [])
         singular_episode_file_from_payload = payload.get('episodeFile')
@@ -661,9 +715,6 @@ async def sonarr_webhook():
             if current_episode_file_info_for_key and current_episode_file_info_for_key.get('relativePath'):
                 unique_key_parts.append(
                     current_episode_file_info_for_key.get('relativePath'))
-            elif release_data_from_payload.get('releaseTitle'):
-                unique_key_parts.append(
-                    release_data_from_payload.get('releaseTitle'))
             elif current_episode_file_info_for_key and current_episode_file_info_for_key.get('sceneName'):
                 unique_key_parts.append(
                     current_episode_file_info_for_key.get('sceneName'))
@@ -689,7 +740,6 @@ async def sonarr_webhook():
                 "episode_data": dict(episode_data),
                 "episode_unique_id": episode_unique_id,
                 "series_data_ref": series_data_from_payload,
-                "release_data_ref": release_data_from_payload,
                 "specific_episode_file_info": dict(current_episode_file_info_for_key) if current_episode_file_info_for_key else None,
             }
             EPISODE_NOTIFICATION_BUFFER[series_id].append(buffered_item)
