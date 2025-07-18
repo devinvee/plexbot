@@ -222,7 +222,7 @@ async def _process_and_send_buffered_notifications(series_id, bot_instance, chan
 
     # Distinct color for debounced
     final_embed = discord.Embed(
-        title=embed_title_str, color=discord.Color.purple())
+        title=embed_title_str, color=0x5dadec)
 
     author_name_prefix = "New Episode" if len(
         buffered_items) == 1 else f"{len(buffered_items)} New Episodes"
