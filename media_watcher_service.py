@@ -129,39 +129,44 @@ def get_requesting_user_from_tags(media_tags: list) -> str:
 
 
 async def _process_and_send_buffered_notifications(series_id, bot_instance, channel_id):
-    logger.info(
-        f"Timer expired for series ID {series_id}. Processing buffered notifications.")
+    logger.debug(
+        f"Starting to process buffered notifications for series_id: {series_id}.")
 
     buffered_items = EPISODE_NOTIFICATION_BUFFER.pop(series_id, [])
     if series_id in SERIES_NOTIFICATION_TIMERS:
         del SERIES_NOTIFICATION_TIMERS[series_id]
+        logger.debug(f"Removed timer for series_id: {series_id}.")
 
     if not buffered_items:
-        logger.info(f"Buffer for series ID {series_id} was empty. No action.")
+        logger.info(
+            f"Buffer for series ID {series_id} was empty. No action needed.")
         return
 
-    # Add all processed episode unique IDs to the global cache now
+    logger.debug(
+        f"Processing {len(buffered_items)} buffered items for series_id: {series_id}.")
+
+    # Add all processed episode unique IDs to the global cache
     for item in buffered_items:
-        if item["episode_unique_id"] not in NOTIFIED_EPISODES_CACHE:
-            NOTIFIED_EPISODES_CACHE.append(item["episode_unique_id"])
+        episode_unique_id = item.get("episode_unique_id", "N/A")
+        if episode_unique_id not in NOTIFIED_EPISODES_CACHE:
+            NOTIFIED_EPISODES_CACHE.append(episode_unique_id)
             logger.debug(
-                f"Added {item['episode_unique_id']} to NOTIFIED_EPISODES_CACHE.")
+                f"Added {episode_unique_id} to NOTIFIED_EPISODES_CACHE.")
         else:
             logger.debug(
-                f"{item['episode_unique_id']} was already in NOTIFIED_EPISODES_CACHE, re-confirming.")
+                f"{episode_unique_id} was already in NOTIFIED_EPISODES_CACHE.")
 
-    # Use data from the most recently added episode for the main embed details
-    # Or sort by airdate/dateAdded if preferred
+    # Use the most recent episode for the main embed details
     latest_item = buffered_items[-1]
-    main_episode_data = latest_item['episode_data']
-    series_data = latest_item['series_data_ref']
-    release_data_for_main_ep = latest_item['release_data_ref']
-    # This is the matched file for the 'latest_item'
-    ep_file_for_main_ep = latest_item.get('specific_episode_file_info')
+    logger.debug(f"Latest item for main embed: {latest_item}")
+
+    main_episode_data = latest_item.get('episode_data', {})
+    series_data = latest_item.get('series_data_ref', {})
+    release_data_for_main_ep = latest_item.get('release_data_ref', {})
+    ep_file_for_main_ep = latest_item.get('specific_episode_file_info', {})
 
     series_title = series_data.get('title', "Unknown Series")
     series_year = series_data.get('year')
-
     season_number = main_episode_data.get('seasonNumber', 0)
     episode_number = main_episode_data.get('episodeNumber', 0)
     episode_title = main_episode_data.get('title', "Unknown Episode")
@@ -169,50 +174,48 @@ async def _process_and_send_buffered_notifications(series_id, bot_instance, chan
         'overview', "No overview available.")
     air_date_utc_str = main_episode_data.get('airDateUtc')
 
-    # --- Quality Extraction for the main_episode_data (latest episode in batch) ---
-    quality_string = "N/A"
-    if ep_file_for_main_ep and isinstance(ep_file_for_main_ep, dict):
-        custom_formats_list = ep_file_for_main_ep.get('customFormats')
-        custom_formats_str = ""
-        if custom_formats_list and isinstance(custom_formats_list, list) and custom_formats_list:
-            custom_formats_str = f" ({', '.join(custom_formats_list)})"
+    logger.debug(
+        f"Extracted main episode details: Series='{series_title}', Episode='S{season_number:02d}E{episode_number:02d} - {episode_title}'")
 
-        q_obj = ep_file_for_main_ep.get('quality')
+    # --- Quality Extraction ---
+    quality_string = "N/A"
+    logger.debug("Starting quality extraction process...")
+    if ep_file_for_main_ep and isinstance(ep_file_for_main_ep, dict):
+        logger.debug(f"Processing ep_file_for_main_ep: {ep_file_for_main_ep}")
+        custom_formats_list = ep_file_for_main_ep.get('customFormats', [])
+        custom_formats_str = f" ({', '.join(custom_formats_list)})" if custom_formats_list else ""
+
+        q_obj = ep_file_for_main_ep.get('quality', {})
         if isinstance(q_obj, str):
             quality_string = q_obj + custom_formats_str
-        elif isinstance(q_obj, dict):  # Nested quality object
-            base_quality_info = q_obj.get('quality')
-            if base_quality_info and isinstance(base_quality_info, dict) and base_quality_info.get('name'):
-                quality_string = base_quality_info.get('name')
-
-            if not custom_formats_str:  # Check nested if not found at file level
-                nested_custom_formats = q_obj.get('customFormats')
-                if nested_custom_formats and isinstance(nested_custom_formats, list) and nested_custom_formats:
+        elif isinstance(q_obj, dict):
+            base_quality_info = q_obj.get('quality', {})
+            quality_name = base_quality_info.get('name')
+            if quality_name:
+                quality_string = quality_name
+            if not custom_formats_str:  # Check nested
+                nested_custom_formats = q_obj.get('customFormats', [])
+                if nested_custom_formats:
                     custom_formats_str = f" ({', '.join(nested_custom_formats)})"
-
             if quality_string != "N/A" or custom_formats_str:
-                if quality_string == "N/A" and custom_formats_str:
-                    quality_string = custom_formats_str.strip(" ()")
-                elif quality_string != "N/A":
-                    quality_string += custom_formats_str
-        elif quality_string == "N/A" and custom_formats_str:  # Only custom formats at file level
-            quality_string = custom_formats_str.strip(" ()")
+                quality_string = quality_string + \
+                    custom_formats_str if quality_string != "N/A" else custom_formats_str.strip(
+                        " ()")
 
-    if quality_string == "N/A" and release_data_for_main_ep and isinstance(release_data_for_main_ep, dict):
+    if quality_string == "N/A" and release_data_for_main_ep:
         logger.debug(
-            f"Falling back to release_data for quality for {series_title} S{season_number}E{episode_number}")
+            f"Falling back to release_data for quality. Data: {release_data_for_main_ep}")
         quality_name_from_release = release_data_for_main_ep.get('quality')
         if quality_name_from_release:
             quality_string = quality_name_from_release
-
         custom_formats_from_release = release_data_for_main_ep.get(
-            'customFormats')
-        if custom_formats_from_release and isinstance(custom_formats_from_release, list) and custom_formats_from_release:
+            'customFormats', [])
+        if custom_formats_from_release:
             cf_release_str = f" ({', '.join(custom_formats_from_release)})"
-            if quality_string != "N/A" and quality_string != "":
-                quality_string += cf_release_str
-            elif quality_string == "N/A" and cf_release_str:
-                quality_string = cf_release_str.strip(" ()")
+            quality_string = (quality_string + cf_release_str) if quality_string not in [
+                "N/A", ""] else cf_release_str.strip(" ()")
+
+    logger.debug(f"Final quality string: '{quality_string}'")
     # --- End Quality Extraction ---
 
     embed_title_str = f"{series_title}"
@@ -220,7 +223,6 @@ async def _process_and_send_buffered_notifications(series_id, bot_instance, chan
         embed_title_str += f" ({series_year})"
     embed_title_str += f" (S{season_number:02d}E{episode_number:02d})"
 
-    # Distinct color for debounced
     final_embed = discord.Embed(
         title=embed_title_str, color=0x5dadec)
 
@@ -235,7 +237,6 @@ async def _process_and_send_buffered_notifications(series_id, bot_instance, chan
     final_embed.add_field(name="Latest: " + (episode_title if episode_title else "N/A"),
                           value=f"S{season_number:02d}E{episode_number:02d}", inline=False)
     if len(episode_overview) > 256:
-        # Shorter for this style
         episode_overview = episode_overview[:253] + "..."
     final_embed.add_field(name="Overview (Latest)",
                           value=episode_overview if episode_overview else "N/A", inline=False)
@@ -246,7 +247,9 @@ async def _process_and_send_buffered_notifications(series_id, bot_instance, chan
                 air_date_utc_str.replace('Z', '+00:00'))
             final_embed.add_field(
                 name="Air Date", value=air_date.strftime('%m/%d/%Y'), inline=True)
-        except ValueError:
+        except (ValueError, TypeError) as e:
+            logger.warning(
+                f"Could not parse airDateUtc: '{air_date_utc_str}'. Error: {e}")
             final_embed.add_field(
                 name="Air Date", value="N/A (unparseable)", inline=True)
     else:
@@ -256,50 +259,38 @@ async def _process_and_send_buffered_notifications(series_id, bot_instance, chan
 
     series_images = series_data.get('images', [])
     poster_url = next((img.get('remoteUrl') or img.get('url')
-                      for img in series_images if img.get('coverType') == 'poster'), None)
+                       for img in series_images if img.get('coverType') == 'poster'), None)
     if poster_url:
         final_embed.set_thumbnail(url=poster_url)
+        logger.debug(f"Set thumbnail to poster URL: {poster_url}")
+    else:
+        logger.debug("No poster image found for series.")
 
-    fanart_url = None
-    main_ep_specific_file_info = latest_item.get(
-        'specific_episode_file_info', {})
-    # Images from the episode object in 'episodes' array
-    main_ep_images_list = main_episode_data.get('images', [])
-
-    # Prefer episode-specific image if available from Sonarr v4 payload structure (less common)
-    if main_ep_images_list:
-        ep_img_url = main_ep_images_list[0].get(
-            'remoteUrl') or main_ep_images_list[0].get('url')
-        if ep_img_url:
-            fanart_url = ep_img_url
-
-    if not fanart_url:  # Fallback to series fanart
+    fanart_url = next((img.get('remoteUrl') or img.get('url')
+                      for img in main_episode_data.get('images', [])), None)
+    if not fanart_url:
         fanart_url = next((img.get('remoteUrl') or img.get(
             'url') for img in series_images if img.get('coverType') == 'fanart'), None)
 
     if fanart_url:
         final_embed.set_image(url=fanart_url)
+        logger.debug(f"Set image to fanart URL: {fanart_url}")
+    else:
+        logger.debug("No fanart image found for episode or series.")
 
     if len(buffered_items) > 1:
-        other_episodes_strs = []
-        # Sort by season/episode for listing
-        sorted_buffered_items = sorted(buffered_items, key=lambda x: (
+        sorted_items = sorted(buffered_items, key=lambda x: (
             x['episode_data'].get('seasonNumber', 0), x['episode_data'].get('episodeNumber', 0)))
-
-        for item in sorted_buffered_items:
-            # Only list if it's not the main one we already detailed, or if you want to list all
-            if item['episode_data'].get('id') != main_episode_data.get('id'):
-                s = item['episode_data'].get('seasonNumber', 0)
-                e = item['episode_data'].get('episodeNumber', 0)
-                t = item['episode_data'].get('title', "N/A")
-                other_episodes_strs.append(f"S{s:02d}E{e:02d} - {t}")
-
+        other_episodes_strs = [f"S{item['episode_data'].get('seasonNumber', 0):02d}E{item['episode_data'].get('episodeNumber', 0):02d} - {item['episode_data'].get('title', 'N/A')}"
+                               for item in sorted_items if item['episode_data'].get('id') != main_episode_data.get('id')]
         if other_episodes_strs:
             other_eps_text = "\n".join(other_episodes_strs)
-            if len(other_eps_text) > 1000:  # Max field value length approx
-                other_eps_text = other_eps_text[:1000] + "...\n(and more)"
+            if len(other_eps_text) > 1024:
+                other_eps_text = other_eps_text[:1020] + "..."
             final_embed.add_field(
                 name=f"Also Added ({len(other_episodes_strs)})", value=other_eps_text, inline=False)
+            logger.debug(
+                f"Added field for {len(other_episodes_strs)} other episodes.")
 
     final_embed.set_footer(
         text=f"{len(buffered_items)} episode(s) in this batch notification.")
@@ -308,8 +299,11 @@ async def _process_and_send_buffered_notifications(series_id, bot_instance, chan
     users_to_ping = get_discord_user_ids_for_tags(series_data.get('tags', []))
     mentions_text = " ".join(
         [f"<@{uid}>" for uid in users_to_ping]) if users_to_ping else ""
+    logger.debug(
+        f"Pinging users: {users_to_ping}. Mention text: '{mentions_text}'")
 
     try:
+        logger.debug("Attempting to send final Discord notification.")
         await send_discord_notification(
             bot_instance=bot_instance,
             user_ids=users_to_ping,
@@ -318,10 +312,10 @@ async def _process_and_send_buffered_notifications(series_id, bot_instance, chan
             embed=final_embed
         )
         logger.info(
-            f"Sent DEBOUNCED Discord notification for {series_title}, {len(buffered_items)} episode(s).")
+            f"Successfully sent DEBOUNCED Discord notification for {series_title}, {len(buffered_items)} episode(s).")
     except Exception as e:
         logger.error(
-            f"Error in _process_and_send_buffered_notifications when calling send_discord_notification: {e}", exc_info=True)
+            f"FATAL: Failed to send Discord notification for {series_title}.", exc_info=True)
 
 
 def normalize_plex_username(username: str) -> str:
