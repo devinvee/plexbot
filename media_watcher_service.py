@@ -296,11 +296,27 @@ async def _process_and_send_buffered_notifications(series_id, bot_instance, chan
         text=f"{len(buffered_items)} episode(s) in this batch notification.")
     final_embed.timestamp = datetime.utcnow()
 
-    users_to_ping = get_discord_user_ids_for_tags(series_data.get('tags', []))
-    mentions_text = " ".join(
-        [f"<@{uid}>" for uid in users_to_ping]) if users_to_ping else ""
-    logger.debug(
-        f"Pinging users: {users_to_ping}. Mention text: '{mentions_text}'")
+    # --- New Code with Error Handling ---
+    users_to_ping = []
+    mentions_text = ""
+    try:
+        logger.debug("Attempting to get Discord user IDs for tags...")
+        tags = series_data.get('tags', [])
+        logger.debug(f"Found tags: {tags}")
+        if tags:
+            users_to_ping = get_discord_user_ids_for_tags(tags)
+            logger.debug(f"Successfully found users to ping: {users_to_ping}")
+            mentions_text = " ".join(
+                [f"<@{uid}>" for uid in users_to_ping]) if users_to_ping else ""
+        else:
+            logger.debug("No tags found in series data. Skipping user ping.")
+
+    except Exception as e:
+        logger.error(
+            f"CRITICAL: Failed during get_discord_user_ids_for_tags call. Notification will be sent without a user ping. Error: {e}",
+            exc_info=True
+        )
+    # --- End of New Code ---
 
     try:
         logger.debug("Attempting to send final Discord notification.")
