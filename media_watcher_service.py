@@ -476,8 +476,11 @@ async def send_discord_notification(bot_instance, user_ids: set, message_content
 @app.route('/webhook/radarr', methods=['POST'])
 async def radarr_webhook_detailed():
     payload = request.json
-    logger.info(
-        f"Received DETAILED Radarr webhook: {payload.get('eventType')} from {request.remote_addr}")
+    logger.debug(
+        "Received payload from %s",
+        payload.get('instanceName'),
+        extra={'payload': payload}
+    )
     bot_instance = app.config.get('discord_bot')
     tmdb_api_key = config.get("tmdb", {}).get("api_key")
 
@@ -500,7 +503,7 @@ async def radarr_webhook_detailed():
     unique_key = (tmdb_id, release_identifier, 'detailed')
 
     if unique_key in NOTIFIED_MOVIES_CACHE:
-        logger.info(f"Notification for {unique_key} already sent. Skipping.")
+        logger.info(f"Notification for %s already sent. Skipping.", unique_key)
         return jsonify({"status": "ignored", "message": "Duplicate event"}), 200
     NOTIFIED_MOVIES_CACHE.append(unique_key)
 
