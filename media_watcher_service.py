@@ -110,24 +110,6 @@ async def fetch_tmdb_movie_details(tmdb_id: int, api_key: str) -> dict:
     return {}
 
 
-def get_requesting_user_from_tags(media_tags: list) -> str:
-    """
-    Finds the first username in the media tags that matches a known user.
-    """
-    if not media_tags:
-        return "N/A"
-
-    normalized_media_tags = [str(tag).lower() for tag in media_tags]
-
-    # Iterate through known users from your config's plex_to_discord mapping
-    for plex_user_norm, discord_id in USER_MAPPINGS.items():
-        # Check if the user's normalized name exists in any of the tags
-        if any(plex_user_norm in tag for tag in normalized_media_tags):
-            return plex_user_norm  # Return the first username that matches
-
-    return "N/A"
-
-
 async def _process_and_send_buffered_notifications(series_id, bot_instance, channel_id):
     logger.debug(
         f"Starting to process buffered notifications for series_id: {series_id}.")
@@ -604,13 +586,10 @@ async def radarr_webhook_detailed():
 
     user_tags = movie_data.get('tags', [])
     user_ids_to_notify = get_discord_user_ids_for_tags(user_tags)
-    requesting_user = get_requesting_user_from_tags(user_tags)
+    logging.info(
+        f"User id's to notify for movie {movie_title}: {user_ids_to_notify}")
     mentions_text = " ".join(
         [f"<@{uid}>" for uid in user_ids_to_notify]) if user_ids_to_notify else None
-
-    if requesting_user != "N/A":
-        embed.add_field(name="Requested By",
-                        value=requesting_user, inline=False)
 
     embed.timestamp = datetime.utcnow()
 
