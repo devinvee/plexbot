@@ -14,11 +14,6 @@
 		"api_key": "${OVERSEERR_API_KEY}",
 		"refresh_interval_minutes": 60
 	},
-	"overseerr": {
-		"base_url": "${OVERSEERR_BASE_URL}",
-		"api_key": "${OVERSEERR_API_KEY}",
-		"refresh_interval_minutes": 60
-	},
 	"sonarr_instances": [
 		{
 			"name": "Sonarr",
