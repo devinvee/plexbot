@@ -327,7 +327,7 @@ async def fetch_overseerr_users():
         logger.warning("Overseerr API config missing. Skipping user sync.")
         return
 
-    url = f"{OVERSEERR_CONFIG['base_url'].rstrip('/')}/api/v1/user"
+    url = f"{OVERSEERR_CONFIG['base_url'].rstrip('/')}/api/v1/user?take=999"
     logger.info(f"Attempting to fetch Overseerr users from: {url}")
 
     headers = {
@@ -389,6 +389,9 @@ async def fetch_overseerr_users():
                 }
         logger.info(
             f"Successfully synced {len(OVERSEERR_USERS_DATA)} Overseerr users.")
+        for k, v in OVERSEERR_USERS_DATA.items():
+            logger.debug(
+                f"Overseerr User: {k} -> Discord ID: {v['discord_id']}")
 
     except requests.exceptions.HTTPError as e:
         logger.error(
@@ -476,11 +479,8 @@ async def send_discord_notification(bot_instance, user_ids: set, message_content
 @app.route('/webhook/radarr', methods=['POST'])
 async def radarr_webhook_detailed():
     payload = request.json
-    logger.debug(
-        "Received payload from %s",
-        payload.get('instanceName'),
-        extra={'payload': payload}
-    )
+    logger.debug("Received payload from %s: %s",
+                 payload.get('instanceName'), payload)
     bot_instance = app.config.get('discord_bot')
     tmdb_api_key = config.get("tmdb", {}).get("api_key")
 
