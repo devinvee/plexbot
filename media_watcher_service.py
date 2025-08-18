@@ -288,7 +288,7 @@ async def _process_and_send_buffered_notifications(series_id, bot_instance, chan
         if tags:
             users_to_ping = get_discord_user_ids_for_tags(tags)
             logger.debug(f"Successfully found users to ping: {users_to_ping}")
-            mentions_text = " ".join(
+            mentions_text = series_title + " ".join(
                 [f"<@{uid}>" for uid in users_to_ping]) if users_to_ping else ""
         else:
             logger.debug("No tags found in series data. Skipping user ping.")
@@ -591,7 +591,7 @@ async def radarr_webhook_detailed():
     user_ids_to_notify = get_discord_user_ids_for_tags(user_tags)
     logging.info(
         f"User id's to notify for movie {movie_title}: {user_ids_to_notify}")
-    mentions_text = " ".join(
+    mentions_text = movie_title + " ".join(
         [f"<@{uid}>" for uid in user_ids_to_notify]) if user_ids_to_notify else None
 
     embed.timestamp = datetime.utcnow()
