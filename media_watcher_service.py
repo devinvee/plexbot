@@ -408,17 +408,28 @@ async def fetch_overseerr_users():
 def get_discord_user_ids_for_tags(media_tags: list) -> set:
     """
     Returns a set of Discord user IDs to notify based on matching Sonarr tags.
-    Matches if a user's normalized plexUsername is a substring of a normalized media tag.
+    Matches if a user's username from the config is a substring of a normalized media tag.
     """
     users_to_notify = set()
+    if not media_tags:
+        return users_to_notify
+
     normalized_media_tags = [tag.lower() for tag in media_tags]
 
-    for normalized_plex_username, user_data in OVERSEERR_USERS_DATA.items():
-        if user_data.get("discord_id"):
-            for media_tag in normalized_media_tags:
-                if normalized_plex_username in media_tag:
-                    users_to_notify.add(user_data["discord_id"])
-                    break
+    # Directly use the user mappings from the loaded config
+    user_map = USER_MAPPINGS
+
+    # Iterate through the usernames and IDs defined in your config.json
+    for username, discord_id in user_map.items():
+        normalized_username = username.lower()
+
+        for media_tag in normalized_media_tags:
+            # This check correctly finds "brianj669" inside "4 - brianj669"
+            if normalized_username in media_tag:
+                users_to_notify.add(discord_id)
+                # Found a match for this user, no need to check other tags for them
+                break
+
     logger.debug(f"Users to notify for tags {media_tags}: {users_to_notify}")
     return users_to_notify
 
