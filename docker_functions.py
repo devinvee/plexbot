@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 # Environment variables for this module
 DOCKER_SERVER_IP = os.environ.get("DOCKER_SERVER_IP")
 DOCKER_SERVER_USER = os.environ.get("DOCKER_SERVER_USER")
-SSH_PORT = os.environ.get("DOCKER_SERVER_PORT", "22")
+SSH_PORT = os.environ.get("SSH_PORT", "22")
 # Consider using SSH keys for better security
 DOCKER_SERVER_PASSWORD = os.environ.get("DOCKER_SERVER_PASSWORD")
 CONTAINER_NAMES = os.environ.get("CONTAINER_NAMES").split(
