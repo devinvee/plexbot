@@ -1,4 +1,3 @@
-```
 """
 Docker-related commands for the bot.
 """
@@ -17,6 +16,7 @@ if TYPE_CHECKING:
     from docker.models.containers import Container
 
 logger = logging.getLogger(__name__)
+
 
 class DockerCog(commands.Cog, name="Docker"):
     def __init__(self, bot: "PlexBot"):
@@ -107,7 +107,7 @@ class DockerCog(commands.Cog, name="Docker"):
             await msg.edit(embed=embed)
         finally:
             ssh.close()
-            
+
     @commands.hybrid_command(name="restartplex", description="Restart Plex container.")
     async def restart_plex_command(self, ctx: commands.Context) -> None:
         """Restarts the Plex Docker container."""
@@ -134,17 +134,19 @@ class DockerCog(commands.Cog, name="Docker"):
             logging.error(f"Error restarting Plex: {e}")
             await ctx.followup.send(f"An unexpected error occurred: {e}", ephemeral=True)
 
+
 async def setup(bot: "PlexBot") -> None:
     # Docker library is optional
     try:
         import docker
         bot.docker = docker
     except ImportError:
-        logging.warning("Docker library not found, Docker-related commands will be unavailable.")
+        logging.warning(
+            "Docker library not found, Docker-related commands will be unavailable.")
         bot.docker = None
 
     if bot.docker:
         await bot.add_cog(DockerCog(bot))
     else:
-        logging.warning("Not loading DockerCog because the Docker library is not installed.")
-```
+        logging.warning(
+            "Not loading DockerCog because the Docker library is not installed.")
