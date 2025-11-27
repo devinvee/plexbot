@@ -192,71 +192,76 @@ async def plex_status_command(interaction: discord.Interaction):
         await interaction.followup.send(f"An unexpected error occurred: {e}", ephemeral=True)
 
 
-@bot.tree.command(name="restartcontainers", description="Restarts the entire stack (Runs 'stack restart')")
+@bot.tree.command(name="restartcontainers", description="Restarts the stack with live log output")
 async def restart_containers_command(interaction: discord.Interaction):
-    # 1. Send immediate feedback
-    await interaction.response.send_message("🚨 Initiating full stack restart via `stack restart`...")
+    # 1. Defer response so we have time to work
+    await interaction.response.defer()
 
-    # 2. Get script path
+    # 2. Setup initial Embed
+    embed = discord.Embed(title="🚀 Stack Restart Initiated",
+                          description="Connecting to host...", color=discord.Color.blue())
+    # We send the initial message and keep a reference to it ('msg') so we can edit it later
+    msg = await interaction.followup.send(embed=embed)
+
     script_path = os.getenv("STACK_RESTART_SCRIPT")
     if not script_path:
-        await interaction.followup.send("❌ Configuration Error: `STACK_RESTART_SCRIPT` is not set in the .env file.")
+        embed.description = "❌ Error: `STACK_RESTART_SCRIPT` env var is missing."
+        embed.color = discord.Color.red()
+        await msg.edit(embed=embed)
         return
 
     # 3. Connect via SSH
     ssh = await get_ssh_client()
     if not ssh:
-        await interaction.followup.send("❌ Connection Error: Could not connect to the host via SSH. Check logs.")
+        embed.description = "❌ Error: Could not connect to host via SSH."
+        embed.color = discord.Color.red()
+        await msg.edit(embed=embed)
         return
 
     try:
-        # 4. Run the command (No sudo, includes 'restart' argument)
+        # 4. Run the command (Unbuffered to get lines instantly)
+        # get_pty=True is often needed to get output in real-time order
         command = f"{script_path} restart"
+        stdin, stdout, stderr = await asyncio.to_thread(ssh.exec_command, command, get_pty=True)
 
-        # Execute command
-        stdin, stdout, stderr = await asyncio.to_thread(ssh.exec_command, command)
+        # 5. The Streaming Loop
+        full_output = ""
+        last_update_time = 0
 
-        # Capture the output text
-        output_msg = (await asyncio.to_thread(stdout.read)).decode().strip()
-        error_msg = (await asyncio.to_thread(stderr.read)).decode().strip()
+        # Read line by line
+        for line in iter(stdout.readline, ""):
+            full_output += line
 
-        # 5. Create the "CLI-like" Embed
-        embed = discord.Embed(title="Terminal Output",
-                              color=discord.Color.dark_grey())
+            # Only update Discord every 2 seconds to avoid rate limits
+            import time
+            current_time = time.time()
+            if current_time - last_update_time > 2.0:
+                # Grab the last 1500 characters so we don't hit Discord's limit
+                display_text = full_output[-1500:]
 
-        # We put the output inside ```bash ... ``` to make it look like a terminal
-        if output_msg:
-            # Truncate if it exceeds Discord's 1024 char limit for fields
-            display_output = output_msg[:1000] + \
-                "..." if len(output_msg) > 1000 else output_msg
-            embed.add_field(
-                name="stdout", value=f"```bash\n{display_output}\n```", inline=False)
-        else:
-            embed.add_field(name="stdout", value="*(No output)*", inline=False)
+                embed.description = f"**Executing: `stack restart`**\n```bash\n{display_text}\n```"
+                try:
+                    await msg.edit(embed=embed)
+                except discord.HTTPException:
+                    pass  # Ignore errors if we update too fast
+                last_update_time = current_time
 
-        if error_msg:
-            display_error = error_msg[:1000] + \
-                "..." if len(error_msg) > 1000 else error_msg
-            embed.add_field(
-                name="stderr", value=f"```yaml\n{display_error}\n```", inline=False)
-            embed.color = discord.Color.orange()  # Turn orange if there are errors
-
-        # Send the embed
-        await interaction.followup.send(embed=embed)
+        # 6. Final Update (Show everything or the end result)
+        final_display = full_output[-1500:]
+        embed.title = "✅ Stack Restart Complete"
+        embed.description = f"**Execution Finished**\n```bash\n{final_display}\n```"
+        embed.color = discord.Color.green()
+        embed.set_footer(text="Services should be stabilizing now.")
+        await msg.edit(embed=embed)
 
     except Exception as e:
-        logging.error(f"Exception during stack restart: {e}")
-        await interaction.followup.send(f"❌ An unexpected error occurred: `{e}`")
-        return
+        logging.error(f"Stack restart exception: {e}")
+        embed.title = "❌ Execution Error"
+        embed.description = f"An error occurred:\n```\n{e}\n```"
+        embed.color = discord.Color.red()
+        await msg.edit(embed=embed)
     finally:
         ssh.close()
-
-    # 6. Wait for stabilization
-    await interaction.followup.send("⏳ Waiting 120 seconds for services to stabilize...")
-    await asyncio.sleep(120)
-
-    # 7. Final Success Message
-    await interaction.followup.send("✅ Stack restart complete. Please try your media again.")
 
 
 # ---- Currently broken plexaccess command allowing users to select which libraries they want to receive access to ---
@@ -435,11 +440,11 @@ async def on_ready():
     logging.info(f"Logged in as {bot.user} (ID: {bot.user.id})")
 
     try:
-        # 👇 THIS IS THE NEW LINE 👇
-        # It takes all your commands and "pastes" them onto your specific server
+        # 1. Copy Global commands to the specific Guild (Server)
+        # This makes them appear instantly on startup
         bot.tree.copy_global_to(guild=TEST_GUILD)
 
-        # Now when we sync, it sees the commands we just copied
+        # 2. Sync the Guild
         synced = await bot.tree.sync(guild=TEST_GUILD)
 
         logging.info(
@@ -447,12 +452,19 @@ async def on_ready():
     except Exception as e:
         logging.error(f"Failed to sync commands: {e}")
 
-    # ... rest of your on_ready code (startup channel, etc) ...
     startup_channel = None
     if CHANNEL_ID_INT:
         startup_channel = bot.get_channel(CHANNEL_ID_INT)
 
-    # (Keep the rest of the existing function below this point)
+    if startup_channel:
+        pass
+        # await startup_channel.send("👋 Bot is online and ready!")
+        # You might add a call here to send initial Real-Debrid status if desired
+        # await send_realdebrid_startup_status(startup_channel) # (Requires defining send_realdebrid_startup_status)
+    else:
+        logging.warning(
+            f"Could not find startup channel with ID: {CHANNEL_ID_INT} or ID was not provided in config.json.")
+
     if not check_premium_expiry.is_running():
         check_premium_expiry.start()
         logging.info("Real-Debrid premium expiry check task started.")
