@@ -10,12 +10,14 @@ logger = logging.getLogger(__name__)
 # Environment variables for this module
 DOCKER_SERVER_IP = os.environ.get("DOCKER_SERVER_IP")
 DOCKER_SERVER_USER = os.environ.get("DOCKER_SERVER_USER")
+SSH_PORT = os.environ.get("DOCKER_SERVER_PORT", "22")
 # Consider using SSH keys for better security
 DOCKER_SERVER_PASSWORD = os.environ.get("DOCKER_SERVER_PASSWORD")
 CONTAINER_NAMES = os.environ.get("CONTAINER_NAMES").split(
     ",") if os.environ.get("CONTAINER_NAMES") else []
 RESTART_ORDER = os.environ.get("RESTART_ORDER").split(
     ",") if os.environ.get("RESTART_ORDER") else []
+
 
 # Log initial configuration values (sensitive info like passwords should be masked/omitted in logs)
 logger.info(f"Docker: DOCKER_SERVER_IP: {DOCKER_SERVER_IP}")
@@ -45,6 +47,7 @@ async def get_ssh_client():
         await asyncio.to_thread(
             ssh.connect,
             DOCKER_SERVER_IP,
+            port=int(SSH_PORT),
             username=DOCKER_SERVER_USER,
             password=DOCKER_SERVER_PASSWORD
         )
@@ -239,6 +242,7 @@ def check_docker_containers_sync():
             f"Docker: Synchronous check: Attempting SSH connect to {DOCKER_SERVER_IP} as {DOCKER_SERVER_USER}...")
         ssh.connect(
             DOCKER_SERVER_IP,
+            port=int(SSH_PORT),
             username=DOCKER_SERVER_USER,
             password=DOCKER_SERVER_PASSWORD
         )
