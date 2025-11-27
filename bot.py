@@ -11,6 +11,7 @@ from plexapi.myplex import MyPlexAccount
 from utils import load_config
 from media_watcher_service import setup_media_watcher_service
 from docker_functions import get_ssh_client
+import re
 
 try:
     import docker
@@ -192,15 +193,21 @@ async def plex_status_command(interaction: discord.Interaction):
         await interaction.followup.send(f"An unexpected error occurred: {e}", ephemeral=True)
 
 
-@bot.tree.command(name="restartcontainers", description="Restarts the stack with live log output")
+@bot.tree.command(name="restartcontainers", description="Restarts the stack with clean log output")
 async def restart_containers_command(interaction: discord.Interaction):
-    # 1. Defer response so we have time to work
     await interaction.response.defer()
 
-    # 2. Setup initial Embed
+    # --- Helper to strip ANSI codes ---
+    import re
+
+    def clean_ansi_codes(text):
+        # This regex matches mostly all ANSI escape sequences (colors, cursor moves, etc)
+        ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+        return ansi_escape.sub('', text)
+    # ----------------------------------
+
     embed = discord.Embed(title="🚀 Stack Restart Initiated",
                           description="Connecting to host...", color=discord.Color.blue())
-    # We send the initial message and keep a reference to it ('msg') so we can edit it later
     msg = await interaction.followup.send(embed=embed)
 
     script_path = os.getenv("STACK_RESTART_SCRIPT")
@@ -210,7 +217,6 @@ async def restart_containers_command(interaction: discord.Interaction):
         await msg.edit(embed=embed)
         return
 
-    # 3. Connect via SSH
     ssh = await get_ssh_client()
     if not ssh:
         embed.description = "❌ Error: Could not connect to host via SSH."
@@ -219,37 +225,38 @@ async def restart_containers_command(interaction: discord.Interaction):
         return
 
     try:
-        # 4. Run the command (Unbuffered to get lines instantly)
-        # get_pty=True is often needed to get output in real-time order
+        # We assume the script is 'stack' and argument is 'restart'
         command = f"{script_path} restart"
+
+        # get_pty=True creates the "live" output feel but adds the ANSI codes
+        # We keep it for the live timing, but clean the text below
         stdin, stdout, stderr = await asyncio.to_thread(ssh.exec_command, command, get_pty=True)
 
-        # 5. The Streaming Loop
         full_output = ""
         last_update_time = 0
+        import time
 
-        # Read line by line
         for line in iter(stdout.readline, ""):
-            full_output += line
+            # Clean the line immediately as it comes in
+            cleaned_line = clean_ansi_codes(line)
+            full_output += cleaned_line
 
-            # Only update Discord every 2 seconds to avoid rate limits
-            import time
             current_time = time.time()
             if current_time - last_update_time > 2.0:
-                # Grab the last 1500 characters so we don't hit Discord's limit
+                # Grab last 1500 chars
                 display_text = full_output[-1500:]
 
                 embed.description = f"**Executing: `stack restart`**\n```bash\n{display_text}\n```"
                 try:
                     await msg.edit(embed=embed)
                 except discord.HTTPException:
-                    pass  # Ignore errors if we update too fast
+                    pass
                 last_update_time = current_time
 
-        # 6. Final Update (Show everything or the end result)
-        final_display = full_output[-1500:]
+        # Final Update
+        cleaned_final = clean_ansi_codes(full_output)[-1500:]
         embed.title = "✅ Stack Restart Complete"
-        embed.description = f"**Execution Finished**\n```bash\n{final_display}\n```"
+        embed.description = f"**Execution Finished**\n```bash\n{cleaned_final}\n```"
         embed.color = discord.Color.green()
         embed.set_footer(text="Services should be stabilizing now.")
         await msg.edit(embed=embed)
@@ -262,7 +269,6 @@ async def restart_containers_command(interaction: discord.Interaction):
         await msg.edit(embed=embed)
     finally:
         ssh.close()
-
 
 # ---- Currently broken plexaccess command allowing users to select which libraries they want to receive access to ---
 # @bot.tree.command(name="plexaccess", description="Select which Plex libraries you are interested in.")

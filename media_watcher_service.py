@@ -806,11 +806,15 @@ async def setup_media_watcher_service(bot_instance):
     """Sets up the media watcher service, including webhook server and sync task."""
     logger.info("Setting up Media Watcher Service...")
 
-    # Initial sync of Overseerr users
-    await fetch_overseerr_users()
+    if OVERSEERR_CONFIG.get("enabled", False):
+        logger.info("Overseerr integration is enabled. Starting user sync.")
+        # Initial sync of Overseerr users
+        await fetch_overseerr_users()
 
-    # Start the periodic Overseerr user sync task in the bot's event loop
-    bot_instance.loop.create_task(start_overseerr_user_sync(bot_instance))
+        # Start the periodic Overseerr user sync task in the bot's event loop
+        bot_instance.loop.create_task(start_overseerr_user_sync(bot_instance))
+    else:
+        logger.info("Overseerr integration is disabled.")
 
     # Start the Flask webhook server in a separate thread
     # This is crucial so it doesn't block the bot's asyncio loop
