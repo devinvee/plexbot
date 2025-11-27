@@ -433,6 +433,11 @@ async def on_ready():
     logging.info(f"Logged in as {bot.user} (ID: {bot.user.id})")
 
     try:
+        # 👇 THIS IS THE NEW LINE 👇
+        # It takes all your commands and "pastes" them onto your specific server
+        bot.tree.copy_global_to(guild=TEST_GUILD)
+
+        # Now when we sync, it sees the commands we just copied
         synced = await bot.tree.sync(guild=TEST_GUILD)
 
         logging.info(
@@ -440,19 +445,12 @@ async def on_ready():
     except Exception as e:
         logging.error(f"Failed to sync commands: {e}")
 
+    # ... rest of your on_ready code (startup channel, etc) ...
     startup_channel = None
     if CHANNEL_ID_INT:
         startup_channel = bot.get_channel(CHANNEL_ID_INT)
 
-    if startup_channel:
-        1 == 1
-        # await startup_channel.send("👋 Bot is online and ready!")
-        # You might add a call here to send initial Real-Debrid status if desired
-        # await send_realdebrid_startup_status(startup_channel) # (Requires defining send_realdebrid_startup_status)
-    else:
-        logging.warning(
-            f"Could not find startup channel with ID: {CHANNEL_ID_INT} or ID was not provided in config.json.")
-
+    # (Keep the rest of the existing function below this point)
     if not check_premium_expiry.is_running():
         check_premium_expiry.start()
         logging.info("Real-Debrid premium expiry check task started.")
