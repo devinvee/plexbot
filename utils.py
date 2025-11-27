@@ -14,7 +14,8 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-def load_config(config_file_path: str = "config.json") -> None:
+
+def load_config(config_file_path: str = "config.json") -> Dict[str, Any]:
     """
     Loads configuration from a JSON file, replacing environment variable placeholders,
     and updates the shared application config.
@@ -31,12 +32,11 @@ def load_config(config_file_path: str = "config.json") -> None:
         raise
 
     processed_config = _replace_placeholders(config_data)
-    try:
-        update_config(processed_config)
-    except TypeError as e:
-        logger.error(f"Error processing configuration: {e}. This may be due to a malformed config file. Please check your config file against the sample.")
-        raise
+    update_config(processed_config)
     logger.info("Shared application configuration updated.")
+
+    return processed_config
+
 
 def _replace_placeholders(obj: Any) -> Any:
     """
