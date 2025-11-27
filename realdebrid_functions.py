@@ -1,7 +1,7 @@
 import discord
 from discord.ext import tasks
 import os
-import requests
+import aiohttp
 import json
 import logging
 from datetime import datetime, timedelta, timezone
@@ -38,9 +38,10 @@ async def check_premium_expiry(bot, channel_id: int):
         f"RealDebrid: Fetching user info from {url} for premium expiry check.")
 
     try:
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
-        data = response.json()
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers) as response:
+                response.raise_for_status()
+                data = await response.json()
 
         if data and data.get('type'):
             premium_until_str = data.get('expiration')
@@ -77,7 +78,7 @@ async def check_premium_expiry(bot, channel_id: int):
             logger.info(
                 "RealDebrid: Account is not premium or type is not specified. No expiry date to track.")
 
-    except requests.exceptions.RequestException as e:
+    except aiohttp.ClientError as e:
         logger.error(
             f"RealDebrid: Network or API error checking Real-Debrid status for expiry: {e}", exc_info=True)
     except json.JSONDecodeError:
@@ -108,9 +109,10 @@ async def send_realdebrid_startup_status(channel):
         f"RealDebrid: Fetching user info from {url} for startup status.")
 
     try:
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
-        data = response.json()
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers) as response:
+                response.raise_for_status()
+                data = await response.json()
         logger.debug(f"RealDebrid: API response for startup status: {data}")
 
         if data:
@@ -133,7 +135,7 @@ async def send_realdebrid_startup_status(channel):
                         int(expiration_timestamp))
                     embed.add_field(name="Expiration Date (Timestamp)", value=expiration_date.strftime(
                         '%Y-%m-%d %H:%M:%S UTC'), inline=False)
-                except ValueError:
+                except (ValueError, TypeError):
                     logger.warning(
                         f"RealDebrid: Invalid 'expiration' timestamp format received: {expiration_timestamp}")
                     embed.add_field(name="Expiration Date (Timestamp)",
@@ -166,7 +168,7 @@ async def send_realdebrid_startup_status(channel):
                 "RealDebrid: Could not retrieve Real-Debrid account information from API response on startup.")
             await channel.send("Could not retrieve Real-Debrid account information on startup.")
 
-    except requests.exceptions.RequestException as e:
+    except aiohttp.ClientError as e:
         logger.error(
             f"RealDebrid: Network or API error checking Real-Debrid status on startup: {e}", exc_info=True)
         await channel.send(f"Error checking Real-Debrid status on startup: {e}")
@@ -201,9 +203,10 @@ async def realdebrid_status_command(interaction: discord.Interaction):
         f"RealDebrid: Fetching user info from {url} for command status.")
 
     try:
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
-        data = response.json()
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers) as response:
+                response.raise_for_status()
+                data = await response.json()
         logger.debug(f"RealDebrid: API response for command status: {data}")
 
         if data:
@@ -226,7 +229,7 @@ async def realdebrid_status_command(interaction: discord.Interaction):
                         int(expiration_timestamp))
                     embed.add_field(name="Expiration Date (Timestamp)", value=expiration_date.strftime(
                         '%Y-%m-%d %H:%M:%S UTC'), inline=False)
-                except ValueError:
+                except (ValueError, TypeError):
                     logger.warning(
                         f"RealDebrid: Invalid 'expiration' timestamp format received for command: {expiration_timestamp}")
                     embed.add_field(name="Expiration Date (Timestamp)",
@@ -260,7 +263,7 @@ async def realdebrid_status_command(interaction: discord.Interaction):
                 "RealDebrid: Could not retrieve Real-Debrid account information from API response for command.")
             await interaction.followup.send("Could not retrieve Real-Debrid account information.")
 
-    except requests.exceptions.RequestException as e:
+    except aiohttp.ClientError as e:
         logger.error(
             f"RealDebrid: Network or API error checking Real-Debrid status for command: {e}", exc_info=True)
         await interaction.followup.send(f"Error checking Real-Debrid status: {e}")

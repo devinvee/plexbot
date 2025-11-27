@@ -167,3 +167,9 @@ docker-compose.override.yml
 /ts-plexbot
 /ts-plexbot
 ts-plexbot/state/tailscaled.log1.txt
+
+# Unused files
+docker_functions.py
+realdebrid_functions.py
+__init__.py
+config.json
