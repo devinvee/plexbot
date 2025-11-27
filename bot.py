@@ -160,6 +160,12 @@ async def sync(ctx: commands.Context):
     """Manually syncs slash commands to the current guild."""
     try:
         await ctx.send(f"Attempting to sync commands to this server...")
+
+        # This line is the magic fix:
+        # It copies all your global commands (like /restartcontainers)
+        # to the specific server you are typing in.
+        bot.tree.copy_global_to(guild=ctx.guild)
+
         synced = await bot.tree.sync(guild=ctx.guild)
         await ctx.send(f"✅ Successfully synced **{len(synced)}** commands.")
     except Exception as e:
