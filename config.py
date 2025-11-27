@@ -25,7 +25,9 @@ class OverseerrConfig:
 @dataclass
 class SonarrInstanceConfig:
     name: str = ""
-    # Add other Sonarr instance fields here
+    url: str = ""
+    api_key: str = ""
+    enabled: bool = False
 
 @dataclass
 class UserMappings:
