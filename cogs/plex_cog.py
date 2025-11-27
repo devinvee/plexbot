@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
 class LibrarySelectView(discord.ui.View):
     def __init__(self, libraries: List["LibrarySection"]):
         super().__init__(timeout=300)
@@ -49,25 +50,27 @@ class PlexCog(commands.Cog, name="Plex"):
             plex = await self.bot.loop.run_in_executor(None, get_plex_client)
 
             if not plex:
-                await ctx.followup.send("Plex server is not configured correctly. Please contact the admin.", ephemeral=True)
+                await ctx.send("Plex server is not configured correctly. Please contact the admin.", ephemeral=True)
                 return
 
             libraries: List["LibrarySection"] = await self.bot.loop.run_in_executor(None, plex.library.sections)
 
             if not libraries:
-                await ctx.followup.send("No Plex libraries found.", ephemeral=True)
+                await ctx.send("No Plex libraries found.", ephemeral=True)
                 return
 
             view = LibrarySelectView(libraries)
 
-            await ctx.followup.send(
+            await ctx.send(
                 "Awesome! So you'd like Plex access? Which libraries are you interested in?",
                 view=view
             )
 
         except Exception as e:
-            logging.error(f"Failed to execute /plexaccess command: {e}", exc_info=True)
-            await ctx.followup.send(f"An error occurred while fetching Plex libraries. Please try again later.", ephemeral=True)
+            logging.error(
+                f"Failed to execute /plexaccess command: {e}", exc_info=True)
+            await ctx.send(f"An error occurred while fetching Plex libraries. Please try again later.", ephemeral=True)
+
 
 async def setup(bot: "PlexBot") -> None:
     await bot.add_cog(PlexCog(bot))

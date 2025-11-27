@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
 class AdminCog(commands.Cog, name="Admin"):
     def __init__(self, bot: "PlexBot"):
         self.bot = bot
@@ -30,6 +31,6 @@ class AdminCog(commands.Cog, name="Admin"):
         except Exception as e:
             await ctx.send(f"❌ Failed to sync commands: {e}")
 
+
 async def setup(bot: "PlexBot") -> None:
     await bot.add_cog(AdminCog(bot))
-

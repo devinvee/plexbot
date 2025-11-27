@@ -25,22 +25,27 @@ class DockerCog(commands.Cog, name="Docker"):
     @commands.hybrid_command(name="plexstatus", description="Check Plex Docker container status.")
     async def plex_status_command(self, ctx: commands.Context) -> None:
         """Checks the status of the Plex Docker container."""
+        # Defer allows the bot to process for more than 3 seconds without timing out
         await ctx.defer(ephemeral=False)
 
         client: "DockerClient" = get_docker_client()
         if not client:
-            await ctx.followup.send("Cannot connect to Docker daemon. Docker commands are unavailable.", ephemeral=True)
+            # FIXED: Use ctx.send instead of ctx.send
+            await ctx.send("Cannot connect to Docker daemon. Docker commands are unavailable.", ephemeral=True)
             return
 
         try:
             plex_container: "Container" = client.containers.get("plex")
             status: str = plex_container.status
-            await ctx.followup.send(f"🎬 Plex container status: `{status}`")
+            # FIXED: Use ctx.send
+            await ctx.send(f"🎬 Plex container status: `{status}`")
         except self.bot.docker.errors.NotFound:
-            await ctx.followup.send("Plex container not found. Check your container name.", ephemeral=True)
+            # FIXED: Use ctx.send
+            await ctx.send("Plex container not found. Check your container name.", ephemeral=True)
         except Exception as e:
             logging.error(f"Error checking Plex status: {e}")
-            await ctx.followup.send(f"An unexpected error occurred: {e}", ephemeral=True)
+            # FIXED: Use ctx.send
+            await ctx.send(f"An unexpected error occurred: {e}", ephemeral=True)
 
     @commands.hybrid_command(name="restartcontainers", description="Restarts the stack with clean log output")
     async def restart_containers_command(self, ctx: commands.Context) -> None:
@@ -53,7 +58,8 @@ class DockerCog(commands.Cog, name="Docker"):
 
         embed = discord.Embed(title="🚀 Stack Restart Initiated",
                               description="Connecting to host...", color=discord.Color.blue())
-        msg = await ctx.followup.send(embed=embed)
+        # FIXED: Use ctx.send. This returns a Message object we can edit later.
+        msg = await ctx.send(embed=embed)
 
         script_path: str = os.getenv("STACK_RESTART_SCRIPT")
         if not script_path:
@@ -115,24 +121,29 @@ class DockerCog(commands.Cog, name="Docker"):
 
         client: "DockerClient" = get_docker_client()
         if not client:
-            await ctx.followup.send("Cannot connect to Docker daemon. Docker commands are unavailable.", ephemeral=True)
+            # FIXED: Use ctx.send
+            await ctx.send("Cannot connect to Docker daemon. Docker commands are unavailable.", ephemeral=True)
             return
 
         try:
             plex_container: "Container" = client.containers.get("plex")
 
-            await ctx.followup.send("🔄 Restarting Plex container...", ephemeral=False)
+            # FIXED: Use ctx.send
+            await ctx.send("🔄 Restarting Plex container...", ephemeral=False)
             await asyncio.to_thread(plex_container.restart, timeout=30)
             await asyncio.sleep(5)
             plex_container.reload()
             status: str = plex_container.status
-            await ctx.followup.send(f"✅ Plex container restart initiated. Current status: `{status}`")
+            # FIXED: Use ctx.send
+            await ctx.send(f"✅ Plex container restart initiated. Current status: `{status}`")
 
         except self.bot.docker.errors.NotFound:
-            await ctx.followup.send("Plex container not found. Check your container name.", ephemeral=True)
+            # FIXED: Use ctx.send
+            await ctx.send("Plex container not found. Check your container name.", ephemeral=True)
         except Exception as e:
             logging.error(f"Error restarting Plex: {e}")
-            await ctx.followup.send(f"An unexpected error occurred: {e}", ephemeral=True)
+            # FIXED: Use ctx.send
+            await ctx.send(f"An unexpected error occurred: {e}", ephemeral=True)
 
 
 async def setup(bot: "PlexBot") -> None:

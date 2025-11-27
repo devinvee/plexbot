@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
 class HealthCheckCog(commands.Cog, name="HealthCheck"):
     def __init__(self, bot: "PlexBot"):
         self.bot = bot
@@ -90,7 +91,8 @@ class HealthCheckCog(commands.Cog, name="HealthCheck"):
         embed.add_field(name="Real-Debrid", value=await self._check_realdebrid_connection(), inline=False)
         embed.add_field(name="Docker", value=await self._check_docker_connection(), inline=False)
 
-        await ctx.followup.send(embed=embed, ephemeral=True)
+        await ctx.send(embed=embed, ephemeral=True)
+
 
 async def setup(bot: "PlexBot"):
     await bot.add_cog(HealthCheckCog(bot))
