@@ -90,9 +90,7 @@ class PlexBot(commands.Bot):
 
 
 if __name__ == "__main__":
-    # You can change the command_prefix to whatever you prefer (e.g., "/", "!", "?")
     bot = PlexBot(command_prefix="!", intents=intents)
-
     try:
         bot.run(DISCORD_TOKEN)
     except Exception as e:
