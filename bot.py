@@ -68,6 +68,7 @@ intents: discord.Intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
+
 class PlexBot(commands.Bot):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -79,11 +80,20 @@ class PlexBot(commands.Bot):
             if filename.endswith('.py'):
                 await self.load_extension(f'cogs.{filename[:-3]}')
                 logging.info(f"Loaded cog: {filename}")
-        
+
         # Setup media watcher service
         await setup_media_watcher_service(self)
         logging.info("Media Watcher Service setup initiated.")
 
     async def on_ready(self) -> None:
         logging.info(f"Logged in as {self.user} (ID: {self.user.id})")
-        
+
+
+if __name__ == "__main__":
+    # You can change the command_prefix to whatever you prefer (e.g., "/", "!", "?")
+    bot = PlexBot(command_prefix="!", intents=intents)
+
+    try:
+        bot.run(DISCORD_TOKEN)
+    except Exception as e:
+        logging.critical(f"Bot crashed with error: {e}", exc_info=True)
