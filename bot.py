@@ -192,10 +192,10 @@ async def plex_status_command(interaction: discord.Interaction):
         await interaction.followup.send(f"An unexpected error occurred: {e}", ephemeral=True)
 
 
-@bot.tree.command(name="restartcontainers", description="Restarts the entire stack (Use this if Plex is broken)")
+@bot.tree.command(name="restartcontainers", description="Restarts the entire stack (Run 'stack restart')")
 async def restart_containers_command(interaction: discord.Interaction):
     # 1. Send immediate feedback
-    await interaction.response.send_message("🚨 Initiating full stack restart. This uses the host script and may take a moment...")
+    await interaction.response.send_message("🚨 Initiating full stack restart via `stack restart`...")
 
     # 2. Get script path
     script_path = os.getenv("STACK_RESTART_SCRIPT")
@@ -210,34 +210,52 @@ async def restart_containers_command(interaction: discord.Interaction):
         return
 
     try:
-        # 4. Run the script using sudo -n (non-interactive)
-        command = f"sudo -n {script_path}"
+        # 4. Run the command WITHOUT sudo
+        # Just the script path + the argument "restart"
+        command = f"{script_path} restart"
 
-        # Execute command in a thread to keep the bot responsive
+        # Execute command
         stdin, stdout, stderr = await asyncio.to_thread(ssh.exec_command, command)
 
-        # Wait for the script to finish and capture output
-        error_msg = (await asyncio.to_thread(stderr.read)).decode().strip()
+        # Capture outputs
         output_msg = (await asyncio.to_thread(stdout.read)).decode().strip()
+        error_msg = (await asyncio.to_thread(stderr.read)).decode().strip()
+
+        # 5. Create Embed
+        embed = discord.Embed(title="Stack Restart Output",
+                              color=discord.Color.blue())
+
+        if output_msg:
+            display_output = output_msg[:1000] + \
+                "..." if len(output_msg) > 1000 else output_msg
+            embed.add_field(
+                name="Output", value=f"```bash\n{display_output}\n```", inline=False)
+        else:
+            embed.add_field(
+                name="Output", value="*(No output returned)*", inline=False)
 
         if error_msg:
-            # Sometimes 'warnings' appear in stderr, so we log it but don't strictly fail unless needed.
-            # If your script outputs essential info to stderr, you might want to adjust this.
-            logging.warning(f"Script Stderr: {error_msg}")
+            display_error = error_msg[:1000] + \
+                "..." if len(error_msg) > 1000 else error_msg
+            embed.add_field(name="Errors/Warnings",
+                            value=f"```yaml\n{display_error}\n```", inline=False)
+            embed.color = discord.Color.orange()
+
+        await interaction.followup.send(embed=embed)
 
     except Exception as e:
         logging.error(f"Exception during stack restart: {e}")
-        await interaction.followup.send("❌ An unexpected error occurred while trying to run the script.")
+        await interaction.followup.send(f"❌ An unexpected error occurred: `{e}`")
         return
     finally:
         ssh.close()
 
-    # 5. Wait for the services to actually come back up
-    await interaction.followup.send("Script executed. Waiting 120 seconds for services to stabilize... ⏳")
+    # 6. Wait for stabilization
+    await interaction.followup.send("⏳ Waiting 120 seconds for services to stabilize...")
     await asyncio.sleep(120)
 
-    # 6. Final success message
-    await interaction.followup.send("✅ Stack should be fully restarted! Please try your media again.")
+    # 7. Final Success Message
+    await interaction.followup.send("✅ Stack restart complete. Please try your media again.")
 
 # ---- Currently broken plexaccess command allowing users to select which libraries they want to receive access to ---
 # @bot.tree.command(name="plexaccess", description="Select which Plex libraries you are interested in.")
