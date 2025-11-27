@@ -11,18 +11,19 @@ from utils import load_config
 from media_watcher_service import setup_media_watcher_service
 from typing import Dict, Any
 
+from config import bot_config, BotConfig
+
 # --- Configuration Loading ---
 CONFIG_FILE = "config.json"
-bot_config: Dict[str, Any] = {}
 try:
-    bot_config = load_config(CONFIG_FILE)
+    load_config(CONFIG_FILE)
 except (FileNotFoundError, json.JSONDecodeError) as e:
     logging.error(
         f"Error loading configuration from '{CONFIG_FILE}': {e}. Exiting.")
     exit(1)
 
 # --- Logging Setup ---
-configured_log_level_str: str = bot_config.get("log_level", "INFO").upper()
+configured_log_level_str: str = bot_config.log_level.upper()
 LOGGING_LEVELS: Dict[str, int] = {
     "DEBUG": logging.DEBUG,
     "INFO": logging.INFO,
@@ -70,7 +71,7 @@ intents.members = True
 class PlexBot(commands.Bot):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.config: Dict[str, Any] = bot_config
+        self.config: BotConfig = bot_config
 
     async def setup_hook(self) -> None:
         # Load cogs

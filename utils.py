@@ -31,7 +31,11 @@ def load_config(config_file_path: str = "config.json") -> None:
         raise
 
     processed_config = _replace_placeholders(config_data)
-    update_config(processed_config)
+    try:
+        update_config(processed_config)
+    except TypeError as e:
+        logger.error(f"Error processing configuration: {e}. This may be due to a malformed config file. Please check your config file against the sample.")
+        raise
     logger.info("Shared application configuration updated.")
 
 def _replace_placeholders(obj: Any) -> Any:

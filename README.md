@@ -2,31 +2,36 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-PlexBot is a powerful, multifaceted Discord bot designed to be the central hub for managing your entire media server ecosystem. It seamlessly integrates with Plex, Docker, Real-Debrid, and the *Arr suite (Sonarr, Radarr) to bring server management, status monitoring, and user administration right into your Discord server.
+PlexBot is a powerful, multifaceted Discord bot designed to be the central hub for managing your entire media server ecosystem. It seamlessly integrates with Plex, Docker, Real-Debrid, and the \*Arr suite (Sonarr, Radarr) to bring server management, status monitoring, and user administration right into your Discord server.
 
 ## ✨ Key Features
 
 PlexBot is packed with features to streamline your media server management:
 
 #### 🐳 Docker & System Management
-- **Container Status:** Quickly check the status of your Plex container (`/plexstatus`).
-- **Container Restarts:** Restart the Plex container or the entire Docker stack directly from Discord (`/restartplex`, `/restartcontainers`).
-- **System Health:** Monitor the health of the bot and its services with a dedicated health check command.
+
+-   **Container Status:** Quickly check the status of your Plex container (`/plexstatus`).
+-   **Container Restarts:** Restart the Plex container or the entire Docker stack directly from Discord (`/restartplex`, `/restartcontainers`).
+-   **System Health:** Monitor the health of the bot and its services with a dedicated health check command.
 
 #### 🗃️ Plex Integration
-- **Library Access Control:** Allow users to select which Plex libraries they are interested in, helping you manage access and notifications (`/plexaccess`).
+
+-   **Library Access Control:** Allow users to select which Plex libraries they are interested in, helping you manage access and notifications (`/plexaccess`).
 
 #### 🧲 Real-Debrid Account Management
-- **Account Status:** Check your Real-Debrid account details, including premium status and expiration (`/realdebrid`).
-- **Expiry Notifications:** Automatically receive a warning in a designated channel when your Real-Debrid subscription is about to expire.
 
-#### 🔔 *Arr Suite & Overseerr Integration
-- **Automated Notifications:** (Implicit) The bot is structured to receive webhook notifications from Sonarr, Radarr, and Overseerr to report on new media, requests, and other events.
-- **Multi-Instance Support:** Configure multiple Sonarr instances (e.g., for 4K content or anime) in the `config.json` file.
+-   **Account Status:** Check your Real-Debrid account details, including premium status and expiration (`/realdebrid`).
+-   **Expiry Notifications:** Automatically receive a warning in a designated channel when your Real-Debrid subscription is about to expire.
+
+#### 🔔 \*Arr Suite & Overseerr Integration
+
+-   **Automated Notifications:** (Implicit) The bot is structured to receive webhook notifications from Sonarr, Radarr, and Overseerr to report on new media, requests, and other events.
+-   **Multi-Instance Support:** Configure multiple Sonarr instances (e.g., for 4K content or anime) in the `config.json` file.
 
 #### 👤 User Management
-- **Automated Role Assignment:** Greet new users and automatically assign them a specific role.
-- **Easy Invite System:** Integrates with services like Wizarr to provide and manage user invites.
+
+-   **Automated Role Assignment:** Greet new users and automatically assign them a specific role.
+-   **Easy Invite System:** Integrates with services like Wizarr to provide and manage user invites.
 
 ---
 
@@ -35,35 +40,43 @@ PlexBot is packed with features to streamline your media server management:
 Follow these steps to get PlexBot up and running on your server.
 
 ### 1. Prerequisites
-- Python 3.10+
-- Docker and Docker Compose
-- A Discord Bot application created on the [Discord Developer Portal](https://discord.com/developers/applications)
+
+-   Python 3.10+
+-   Docker and Docker Compose
+-   A Discord Bot application created on the [Discord Developer Portal](https://discord.com/developers/applications)
 
 ### 2. Installation
+
 Clone the repository to your local machine:
+
 ```bash
 git clone https://github.com/your-username/Plexbot.git
 cd Plexbot
 ```
 
 ### 3. Setup
+
 It is highly recommended to use a Python virtual environment.
+
 ```bash
 python -m venv venv
 source venv/bin/activate  # On Windows, use `venv\Scripts\activate`
 ```
 
 Install the required dependencies:
+
 ```bash
 pip install -r requirements.txt
 ```
 
 ### 4. Configuration
+
 PlexBot uses two primary configuration files. Sample files are provided to get you started.
 
 **A. Environment Variables (`.env`)**
 
 Copy the sample file:
+
 ```bash
 cp sample.env .env
 ```
@@ -73,6 +86,7 @@ Now, edit the `.env` file and fill in your details. This file holds your secret 
 **B. JSON Configuration (`config.json`)**
 
 Copy the sample configuration:
+
 ```bash
 cp config.json.sample config.json
 ```
@@ -80,7 +94,9 @@ cp config.json.sample config.json
 Edit `config.json` to configure the bot's features, like enabling/disabling modules, setting up Sonarr instances, and mapping users.
 
 ### 5. Running the Bot
+
 Once configured, you can start the bot with:
+
 ```bash
 python bot.py
 ```
@@ -93,11 +109,11 @@ For a more robust setup, it is recommended to run the bot using the provided `do
 
 Here are some of the primary commands you can use with PlexBot:
 
-- `/plexstatus` - Checks the status of the Plex Docker container.
-- `/restartplex` - Initiates a restart of the Plex container.
-- `/restartcontainers` - Restarts the entire container stack defined in your environment file.
-- `/realdebrid` - Fetches and displays your Real-Debrid account status.
-- `/plexaccess` - Allows users to self-select the Plex libraries they're interested in.
+-   `/plexstatus` - Checks the status of the Plex Docker container.
+-   `/restartplex` - Initiates a restart of the Plex container.
+-   `/restartcontainers` - Restarts the entire container stack defined in your environment file.
+-   `/realdebrid` - Fetches and displays your Real-Debrid account status.
+-   `/plexaccess` - Allows users to self-select the Plex libraries they're interested in.
 
 ---
 

@@ -1,12 +1,13 @@
 {
     "discord": {
-      "notification_channel_id": "your_discord_channel_id_here",
-      "dm_notifications_enabled": true
-    },
-    "new_user_invite": {
-      "enabled": true,
-      "role_id": "new_user_role_id_here",
-      "invite_link": "https://your.invite.link/here"
+      "sonarr_notification_channel_id": "your_discord_channel_id_for_sonarr",
+      "radarr_notification_channel_id": "your_discord_channel_id_for_radarr",
+      "dm_notifications_enabled": true,
+      "new_user_invite": {
+        "enabled": true,
+        "role_id": "new_user_role_id_here",
+        "invite_link": "https://your.invite.link/here"
+      }
     },
     "overseerr": {
       "enabled": false,
@@ -39,6 +40,9 @@
         "plex_username_1": "discord_user_id_1",
         "plex_username_2": "discord_user_id_2"
       }
+    },
+    "tmdb": {
+      "api_key": "your_tmdb_api_key"
     },
     "log_level": "info"
   }
