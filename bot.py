@@ -192,7 +192,7 @@ async def plex_status_command(interaction: discord.Interaction):
         await interaction.followup.send(f"An unexpected error occurred: {e}", ephemeral=True)
 
 
-@bot.tree.command(name="restartcontainers", description="Restarts the entire stack (Run 'stack restart')")
+@bot.tree.command(name="restartcontainers", description="Restarts the entire stack (Runs 'stack restart')")
 async def restart_containers_command(interaction: discord.Interaction):
     # 1. Send immediate feedback
     await interaction.response.send_message("🚨 Initiating full stack restart via `stack restart`...")
@@ -210,37 +210,38 @@ async def restart_containers_command(interaction: discord.Interaction):
         return
 
     try:
-        # 4. Run the command WITHOUT sudo
-        # Just the script path + the argument "restart"
+        # 4. Run the command (No sudo, includes 'restart' argument)
         command = f"{script_path} restart"
 
         # Execute command
         stdin, stdout, stderr = await asyncio.to_thread(ssh.exec_command, command)
 
-        # Capture outputs
+        # Capture the output text
         output_msg = (await asyncio.to_thread(stdout.read)).decode().strip()
         error_msg = (await asyncio.to_thread(stderr.read)).decode().strip()
 
-        # 5. Create Embed
-        embed = discord.Embed(title="Stack Restart Output",
-                              color=discord.Color.blue())
+        # 5. Create the "CLI-like" Embed
+        embed = discord.Embed(title="Terminal Output",
+                              color=discord.Color.dark_grey())
 
+        # We put the output inside ```bash ... ``` to make it look like a terminal
         if output_msg:
+            # Truncate if it exceeds Discord's 1024 char limit for fields
             display_output = output_msg[:1000] + \
                 "..." if len(output_msg) > 1000 else output_msg
             embed.add_field(
-                name="Output", value=f"```bash\n{display_output}\n```", inline=False)
+                name="stdout", value=f"```bash\n{display_output}\n```", inline=False)
         else:
-            embed.add_field(
-                name="Output", value="*(No output returned)*", inline=False)
+            embed.add_field(name="stdout", value="*(No output)*", inline=False)
 
         if error_msg:
             display_error = error_msg[:1000] + \
                 "..." if len(error_msg) > 1000 else error_msg
-            embed.add_field(name="Errors/Warnings",
-                            value=f"```yaml\n{display_error}\n```", inline=False)
-            embed.color = discord.Color.orange()
+            embed.add_field(
+                name="stderr", value=f"```yaml\n{display_error}\n```", inline=False)
+            embed.color = discord.Color.orange()  # Turn orange if there are errors
 
+        # Send the embed
         await interaction.followup.send(embed=embed)
 
     except Exception as e:
@@ -256,6 +257,7 @@ async def restart_containers_command(interaction: discord.Interaction):
 
     # 7. Final Success Message
     await interaction.followup.send("✅ Stack restart complete. Please try your media again.")
+
 
 # ---- Currently broken plexaccess command allowing users to select which libraries they want to receive access to ---
 # @bot.tree.command(name="plexaccess", description="Select which Plex libraries you are interested in.")
