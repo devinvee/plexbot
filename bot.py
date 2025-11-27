@@ -10,6 +10,7 @@ from plexapi.server import PlexServer
 from plexapi.myplex import MyPlexAccount
 from utils import load_config
 from media_watcher_service import setup_media_watcher_service
+from docker_functions import get_ssh_client
 
 try:
     import docker
@@ -185,41 +186,52 @@ async def plex_status_command(interaction: discord.Interaction):
         await interaction.followup.send(f"An unexpected error occurred: {e}", ephemeral=True)
 
 
-@bot.tree.command(name="restartcontainers", description="Restart specified Docker containers in order.")
+@bot.tree.command(name="restartcontainers", description="Restarts the entire stack (Use this if Plex is broken)")
 async def restart_containers_command(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=False)  # Defer publicly
+    # 1. Send immediate feedback
+    await interaction.response.send_message("🚨 Initiating full stack restart. This uses the host script and may take a moment...")
 
-    client = _get_docker_client()
-    if not client:
-        await interaction.followup.send("Cannot connect to Docker daemon. Docker commands are unavailable.", ephemeral=True)
+    # 2. Get script path
+    script_path = os.getenv("STACK_RESTART_SCRIPT")
+    if not script_path:
+        await interaction.followup.send("❌ Configuration Error: `STACK_RESTART_SCRIPT` is not set in the .env file.")
         return
 
-    containers_to_restart_in_order = [
-        "qbittorrent",
-        "sonarr",
-        "radarr",
-        "plex"
-    ]
+    # 3. Connect via SSH
+    ssh = await get_ssh_client()
+    if not ssh:
+        await interaction.followup.send("❌ Connection Error: Could not connect to the host via SSH. Check logs.")
+        return
 
-    await interaction.followup.send("🔄 Attempting to restart specified containers in order...", ephemeral=False)
+    try:
+        # 4. Run the script using sudo -n (non-interactive)
+        command = f"sudo -n {script_path}"
 
-    for name in containers_to_restart_in_order:
-        try:
-            container = client.containers.get(name)
-            await interaction.followup.send(f"Stopping `{name}`...", ephemeral=False)
-            container.stop(timeout=30)  # Add timeout for graceful stop
-            await interaction.followup.send(f"Starting `{name}`...", ephemeral=False)
-            container.start()
-            await interaction.followup.send(f"✅ `{name}` restarted successfully.")
-            await asyncio.sleep(5)
-        except docker.errors.NotFound:
-            await interaction.followup.send(f"⚠️ Container `{name}` not found. Skipping.", ephemeral=False)
-        except Exception as e:
-            logging.error(f"Error restarting container {name}: {e}")
-            await interaction.followup.send(f"❌ Error restarting `{name}`: {e}", ephemeral=False)
+        # Execute command in a thread to keep the bot responsive
+        stdin, stdout, stderr = await asyncio.to_thread(ssh.exec_command, command)
 
-    await interaction.followup.send("✨ All specified containers processed.")
+        # Wait for the script to finish and capture output
+        error_msg = (await asyncio.to_thread(stderr.read)).decode().strip()
+        output_msg = (await asyncio.to_thread(stdout.read)).decode().strip()
 
+        if error_msg:
+            # Sometimes 'warnings' appear in stderr, so we log it but don't strictly fail unless needed.
+            # If your script outputs essential info to stderr, you might want to adjust this.
+            logging.warning(f"Script Stderr: {error_msg}")
+
+    except Exception as e:
+        logging.error(f"Exception during stack restart: {e}")
+        await interaction.followup.send("❌ An unexpected error occurred while trying to run the script.")
+        return
+    finally:
+        ssh.close()
+
+    # 5. Wait for the services to actually come back up
+    await interaction.followup.send("Script executed. Waiting 120 seconds for services to stabilize... ⏳")
+    await asyncio.sleep(120)
+
+    # 6. Final success message
+    await interaction.followup.send("✅ Stack should be fully restarted! Please try your media again.")
 
 # ---- Currently broken plexaccess command allowing users to select which libraries they want to receive access to ---
 # @bot.tree.command(name="plexaccess", description="Select which Plex libraries you are interested in.")
