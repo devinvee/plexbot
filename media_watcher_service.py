@@ -81,7 +81,7 @@ async def _process_and_send_buffered_notifications(series_id: str, bot_instance:
             f"Processing buffered notifications for series_id: {series_id}")
         buffered_items = EPISODE_NOTIFICATION_BUFFER.pop(series_id, [])
         if series_id in SERIES_NOTIFICATION_TIMERS:
-            SERIES_NOTIFICATION_TIMERS.pop(series_id).cancel()
+            SERIES_NOTIFICATION_TIMERS.pop(series_id, None)
 
         if not buffered_items:
             logger.warning(
@@ -135,20 +135,35 @@ async def _process_and_send_buffered_notifications(series_id: str, bot_instance:
             text=f"{ep_count} episode(s) in this batch notification. • Today at {timestamp_str}")
 
         # Images
+        # UPDATED: Validation logic to prefer remoteUrl and ensure HTTP
         images = series_data.get('images', [])
         poster_url = None
         fanart_url = None
 
         for img in images:
-            if img.get('coverType') == 'poster':
-                poster_url = img.get('url')
-            elif img.get('coverType') == 'fanart':
-                fanart_url = img.get('url')
+            # Prioritize 'remoteUrl' (TVDB link) over 'url' (often local path)
+            url_to_use = img.get('remoteUrl')
+            if not url_to_use:
+                url_to_use = img.get('url')
 
-        if fanart_url:
+            if img.get('coverType') == 'poster':
+                poster_url = url_to_use
+            elif img.get('coverType') == 'fanart':
+                fanart_url = url_to_use
+            elif img.get('coverType') == 'banner':
+                if not fanart_url:
+                    fanart_url = url_to_use
+
+        # Only set if it looks like a valid http URL
+        if fanart_url and fanart_url.startswith("http"):
             embed.set_image(url=fanart_url)
-        if poster_url:
+        elif fanart_url:
+            logger.warning(f"Skipping invalid/local fanart URL: {fanart_url}")
+
+        if poster_url and poster_url.startswith("http"):
             embed.set_thumbnail(url=poster_url)
+        elif poster_url:
+            logger.warning(f"Skipping invalid/local poster URL: {poster_url}")
 
         # --- User Tagging ---
         user_tags = series_data.get('tags', [])
