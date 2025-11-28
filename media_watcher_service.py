@@ -174,7 +174,7 @@ async def _process_and_send_buffered_notifications(series_id: str, bot_instance:
             ping_string = " ".join([f"<@{uid}>" for uid in users_to_ping])
 
             title = series_data.get('title', 'Unknown Series')
-            mentions_text = f"**{title}** is now available! {ping_string}"
+            mentions_text = f"Episode **{ep_string}** of **{title}** is now available! {ping_string}"
             logger.info(
                 f"Sonarr Notification: Tagging users {users_to_ping} based on tags {user_tags}")
 
