@@ -18,7 +18,7 @@ from media_watcher_utils import (
 
 logger = logging.getLogger(__name__)
 
-# --- State Management (Globals, consider refactoring to a class) ---
+# --- State Management ---
 EPISODE_NOTIFICATION_BUFFER: Dict[str, list] = defaultdict(list)
 SERIES_NOTIFICATION_TIMERS: Dict[str, asyncio.TimerHandle] = {}
 NOTIFIED_EPISODES_CACHE: Deque[tuple] = deque(maxlen=1000)
@@ -30,6 +30,8 @@ DEBOUNCE_SECONDS = 60
 app = Flask(__name__)
 
 # --- Core Notification Logic ---
+
+
 async def send_discord_notification(
     bot_instance: discord.Client,
     config: BotConfig,
@@ -40,7 +42,8 @@ async def send_discord_notification(
 ):
     """Sends a message with an optional embed to a channel and DMs users."""
     if not bot_instance:
-        logger.error("Discord bot instance not available. Cannot send messages.")
+        logger.error(
+            "Discord bot instance not available. Cannot send messages.")
         return
 
     # Send to the main channel
@@ -50,9 +53,11 @@ async def send_discord_notification(
             if channel:
                 await channel.send(content=message_content or None, embed=embed)
             else:
-                logger.warning(f"Could not find notification channel with ID: {channel_id}")
+                logger.warning(
+                    f"Could not find notification channel with ID: {channel_id}")
         except (ValueError, discord.HTTPException) as e:
-            logger.error(f"Error sending message to channel {channel_id}: {e}", exc_info=True)
+            logger.error(
+                f"Error sending message to channel {channel_id}: {e}", exc_info=True)
 
     # Send DMs
     if config.discord.dm_notifications_enabled and user_ids:
@@ -63,7 +68,9 @@ async def send_discord_notification(
             except (ValueError, discord.NotFound, discord.Forbidden) as e:
                 logger.warning(f"Could not send DM to user {user_id}: {e}")
             except Exception as e:
-                logger.error(f"Unexpected error sending DM to {user_id}: {e}", exc_info=True)
+                logger.error(
+                    f"Unexpected error sending DM to {user_id}: {e}", exc_info=True)
+
 
 async def _process_and_send_buffered_notifications(series_id: str, bot_instance: discord.Client, channel_id: str):
     """Processes buffered episodes for a series and sends a single notification."""
@@ -74,24 +81,78 @@ async def _process_and_send_buffered_notifications(series_id: str, bot_instance:
     if not buffered_items:
         return
 
+    # Mark as notified
     for item in buffered_items:
         NOTIFIED_EPISODES_CACHE.append(item.get("episode_unique_id", ""))
 
+    # Use the first item for series metadata, but combine episode specific data
     latest_item = buffered_items[-1]
     series_data = latest_item.get('series_data_ref', {})
-    
-    # Simplified embed creation logic
-    embed = discord.Embed(
-        title=f"{series_data.get('title', 'N/A')} ({series_data.get('year', 'N/A')})",
-        color=0x5DADEB
-    )
-    # Further embed building would go here...
+    episode_data = latest_item.get('episode_data', {})
+    quality_string = latest_item.get('quality', 'N/A')
 
+    # --- Build Rich Embed (Restoring the "Top" Look) ---
+    embed = discord.Embed(color=0x00A4DC)  # Sonarr Blue
+    embed.set_author(name="New Episode Available - Sonarr",
+                     icon_url="https://i.imgur.com/tV61XQZ.png")
+
+    # Title: Series Name (Year) (SxxExx)
+    season_num = episode_data.get('seasonNumber')
+    episode_num = episode_data.get('episodeNumber')
+    ep_string = f"S{season_num:02d}E{episode_num:02d}"
+
+    embed.title = f"{series_data.get('title', 'Unknown Series')} ({series_data.get('year', 'N/A')}) ({ep_string})"
+
+    # Episode Info Field
+    episode_title = episode_data.get('title', 'Unknown Title')
+    embed.add_field(name=f"Latest: {episode_title}",
+                    value=ep_string, inline=False)
+
+    # Overview Field
+    overview = episode_data.get('overview', '')
+    if overview:
+        # Truncate if too long to prevent errors
+        if len(overview) > 1000:
+            overview = overview[:997] + "..."
+        embed.add_field(name="Overview (Latest)", value=overview, inline=False)
+
+    # Details Row
+    air_date = episode_data.get('airDate', 'N/A')
+    embed.add_field(name="Air Date", value=air_date, inline=True)
+    embed.add_field(name="Quality", value=quality_string, inline=True)
+
+    # Footer with batch info
+    ep_count = len(buffered_items)
+    timestamp_str = datetime.now().strftime("%H:%M")
+    embed.set_footer(
+        text=f"{ep_count} episode(s) in this batch notification. • Today at {timestamp_str}")
+
+    # Images
+    # Try to find a banner/fanart for the main image, and poster for thumbnail
+    images = series_data.get('images', [])
+    poster_url = None
+    fanart_url = None
+
+    for img in images:
+        if img.get('coverType') == 'poster':
+            poster_url = img.get('url')
+        elif img.get('coverType') == 'fanart':
+            fanart_url = img.get('url')
+
+    if fanart_url:
+        embed.set_image(url=fanart_url)
+    if poster_url:
+        embed.set_thumbnail(url=poster_url)
+
+    # --- User Tagging ---
     user_tags = series_data.get('tags', [])
     users_to_ping = get_discord_user_ids_for_tags(user_tags)
-    mentions_text = f"{series_data.get('title', 'N/A')} " + " ".join(
-        f"<@{uid}>" for uid in users_to_ping
-    )
+
+    mentions_text = ""
+    if users_to_ping:
+        mentions_text = " ".join(f"<@{uid}>" for uid in users_to_ping)
+        logger.info(
+            f"Sonarr Notification: Tagging users {users_to_ping} based on tags {user_tags}")
 
     await send_discord_notification(
         bot_instance=bot_instance,
@@ -103,6 +164,8 @@ async def _process_and_send_buffered_notifications(series_id: str, bot_instance:
     )
 
 # --- Webhook Endpoints ---
+
+
 @app.route('/webhook/radarr', methods=['POST'])
 async def radarr_webhook_detailed():
     """Handles Radarr's 'On Grab' and 'On Download' webhook events."""
@@ -113,9 +176,8 @@ async def radarr_webhook_detailed():
 
         bot_instance = app.config.get('discord_bot')
         if not bot_instance:
-            logger.error("Bot instance not found in Flask app config.")
             return jsonify({"status": "error", "message": "Internal server error"}), 500
-        
+
         config = bot_instance.config
         tmdb_api_key = config.tmdb.api_key
 
@@ -124,107 +186,72 @@ async def radarr_webhook_detailed():
 
         movie_data = payload.get('movie', {})
         movie_file_data = payload.get('movieFile', {})
-        unique_key = (movie_data.get('tmdbId'), movie_file_data.get('relativePath'), 'detailed')
+        remote_movie_data = payload.get('remoteMovie', {})
 
+        # Deduplication
+        unique_key = (movie_data.get('tmdbId'), movie_file_data.get(
+            'relativePath', 'unknown'), payload.get('eventType'))
         if unique_key in NOTIFIED_MOVIES_CACHE:
             return jsonify({"status": "ignored", "message": "Duplicate event"}), 200
         NOTIFIED_MOVIES_CACHE.append(unique_key)
 
+        # Fetch TMDB Details
         tmdb_details = await fetch_tmdb_movie_details(movie_data.get('tmdbId'), tmdb_api_key)
-        # ... (rest of the Radarr embed creation)
-        
+
+        # --- Build Rich Embed for Radarr ---
+        embed = discord.Embed(color=0xFFC107)  # Radarr Yellow/Gold
+        embed.set_author(name=f"New Movie Available - Radarr",
+                         icon_url="https://i.imgur.com/d1p8gCa.png")
+
+        title = movie_data.get('title', 'Unknown Movie')
+        year = movie_data.get('year', '')
+        embed.title = f"{title} ({year})"
+
+        # Overview
+        overview = movie_data.get('overview', '')
+        if not overview and tmdb_details:
+            overview = tmdb_details.get('overview', '')
+
+        if overview:
+            if len(overview) > 1000:
+                overview = overview[:997] + "..."
+            embed.add_field(name="Overview", value=overview, inline=False)
+
+        # Details
+        quality = movie_file_data.get(
+            'quality', remote_movie_data.get('quality', 'N/A'))
+        embed.add_field(name="Quality", value=quality, inline=True)
+
+        release_date = movie_data.get(
+            'inCinemas') or movie_data.get('physicalRelease')
+        if release_date:
+             embed.add_field(name="Release Date",
+                             value=release_date, inline=True)
+
+        # Images (Prefer TMDB, fallback to payload)
+        poster_path = tmdb_details.get('poster_path')
+        backdrop_path = tmdb_details.get('backdrop_path')
+
+        if backdrop_path:
+            embed.set_image(
+                url=f"https://image.tmdb.org/t/p/w1280{backdrop_path}")
+        elif poster_path:
+            embed.set_image(
+                url=f"https://image.tmdb.org/t/p/w780{poster_path}")
+
+        if poster_path:
+            embed.set_thumbnail(
+                url=f"https://image.tmdb.org/t/p/w300{poster_path}")
+
+        # --- Tagging ---
         user_tags = movie_data.get('tags', [])
         user_ids_to_notify = get_discord_user_ids_for_tags(user_tags)
-        mentions = " ".join(f"<@{uid}>" for uid in user_ids_to_notify)
+        mentions = ""
+        if user_ids_to_notify:
+            mentions = " ".join(f"<@{uid}>" for uid in user_ids_to_notify)
+            logger.info(
+                f"Radarr Notification: Tagging users {user_ids_to_notify} based on tags {user_tags}")
 
         asyncio.run_coroutine_threadsafe(
             send_discord_notification(
-                bot_instance, config, user_ids_to_notify, mentions, config.discord.radarr_notification_channel_id, discord.Embed()
-            ),
-            bot_instance.loop,
-        )
-        return jsonify({"status": "success"}), 200
-    except Exception as e:
-        logger.error(f"Error processing Radarr webhook: {e}", exc_info=True)
-        return jsonify({"status": "error", "message": "Internal server error"}), 500
-
-@app.route('/webhook/sonarr', methods=['POST'])
-async def sonarr_webhook():
-    """Handles Sonarr's 'On Grab' and 'On Download' webhook events with debouncing."""
-    try:
-        payload = request.json
-        if not payload:
-            return jsonify({"status": "error", "message": "No JSON payload received"}), 400
-
-        bot_instance = app.config.get('discord_bot')
-        if not bot_instance:
-            logger.error("Bot instance not found in Flask app config.")
-            return jsonify({"status": "error", "message": "Internal server error"}), 500
-
-        config = bot_instance.config
-
-        if payload.get('eventType') not in ['Download', 'EpisodeImport']:
-            return jsonify({"status": "ignored", "reason": "Unsupported event type"}), 200
-
-        series_data = payload.get('series', {})
-        series_id = series_data.get('id')
-        if not series_id:
-            return jsonify({"status": "error", "message": "Missing series ID"}), 400
-
-        for episode_data in payload.get('episodes', []):
-            unique_id = (series_id, episode_data.get('id'))
-            if unique_id in NOTIFIED_EPISODES_CACHE:
-                continue
-            
-            EPISODE_NOTIFICATION_BUFFER[series_id].append({
-                "episode_data": episode_data,
-                "episode_unique_id": unique_id,
-                "series_data_ref": series_data,
-            })
-
-        if series_id in SERIES_NOTIFICATION_TIMERS:
-            SERIES_NOTIFICATION_TIMERS[series_id].cancel()
-
-        SERIES_NOTIFICATION_TIMERS[series_id] = bot_instance.loop.call_later(
-            DEBOUNCE_SECONDS,
-            lambda: asyncio.run_coroutine_threadsafe(
-                _process_and_send_buffered_notifications(series_id, bot_instance, config.discord.sonarr_notification_channel_id),
-                bot_instance.loop,
-            ),
-        )
-        return jsonify({"status": "success"}), 200
-    except Exception as e:
-        logger.error(f"Error processing Sonarr webhook: {e}", exc_info=True)
-        return jsonify({"status": "error", "message": "Internal server error"}), 500
-
-# --- Service Setup ---
-async def start_overseerr_user_sync(bot_instance: discord.Client):
-    """Periodically syncs users from Overseerr."""
-    config = bot_instance.config
-    while True:
-        global OVERSEERR_USERS_DATA
-        OVERSEERR_USERS_DATA = await fetch_overseerr_users()
-        await asyncio.sleep(config.overseerr.refresh_interval_minutes * 60)
-
-def run_webhook_server(bot_instance: discord.Client):
-    """Starts the Flask server in a separate thread."""
-    app.config['discord_bot'] = bot_instance
-    app.run(host='0.0.0.0', port=5000, debug=False)
-
-async def setup_media_watcher_service(bot_instance: discord.Client):
-    """Initializes the media watcher service."""
-    config = bot_instance.config
-    if not config.discord.sonarr_notification_channel_id:
-        logger.warning("Sonarr notification channel not set. Sonarr notifications will be disabled.")
-    if not config.discord.radarr_notification_channel_id:
-        logger.warning("Radarr notification channel not set. Radarr notifications will be disabled.")
-
-    if config.overseerr.enabled:
-        logger.info("Overseerr integration is enabled. Starting user sync.")
-        bot_instance.loop.create_task(start_overseerr_user_sync(bot_instance))
-    else:
-        logger.info("Overseerr integration is disabled.")
-
-    import threading
-    threading.Thread(target=run_webhook_server, args=(bot_instance,), daemon=True).start()
-    logger.info("Flask webhook server started in a background thread on port 5000.")
+                bot_instance, config, user_ids_to_notify, mentions,
