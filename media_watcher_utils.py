@@ -9,6 +9,7 @@ from config import bot_config
 
 logger = logging.getLogger(__name__)
 
+
 async def fetch_tmdb_movie_details(tmdb_id: int, api_key: str) -> Dict[str, Any]:
     """
     Fetches detailed movie information from the TMDB API, including videos and release dates.
@@ -33,22 +34,28 @@ async def fetch_tmdb_movie_details(tmdb_id: int, api_key: str) -> Dict[str, Any]
 
     return {}
 
+
 def normalize_plex_username(username: str) -> str:
     """Converts a plex username to a consistent format for tag matching."""
     return username.lower().replace(" ", "")
 
+
 async def fetch_overseerr_users() -> Dict[str, Dict[str, Any]]:
     """Fetches users from Overseerr API and returns a dictionary of users."""
-    overseerr_config = bot_config.get("overseerr", {})
-    if not overseerr_config.get("base_url") or not overseerr_config.get("api_key"):
+    # FIXED: Access dataclass attributes directly instead of using .get()
+    overseerr_config = bot_config.overseerr
+
+    if not overseerr_config.base_url or not overseerr_config.api_key:
         logger.warning("Overseerr API config missing. Skipping user sync.")
         return {}
 
-    url = f"{overseerr_config['base_url'].rstrip('/')}/api/v1/user?take=999"
+    url = f"{overseerr_config.base_url.rstrip('/')}/api/v1/user?take=999"
     logger.info(f"Attempting to fetch Overseerr users from: {url}")
 
     headers = {
-        "X-Api-Key": overseerr_config['api_key'], "Accept": "application/json"}
+        "X-Api-Key": overseerr_config.api_key,
+        "Accept": "application/json"
+    }
 
     try:
         response = await asyncio.to_thread(requests.get, url, headers=headers, timeout=15)
@@ -62,7 +69,9 @@ async def fetch_overseerr_users() -> Dict[str, Dict[str, Any]]:
             return {}
 
         overseerr_users_data = {}
-        user_mappings = bot_config.get("user_mappings", {}).get("plex_to_discord", {})
+        # FIXED: Access dataclass attributes directly
+        user_mappings = bot_config.user_mappings.plex_to_discord
+
         for user in users_list:
             if not isinstance(user, dict):
                 logger.warning(
@@ -71,8 +80,9 @@ async def fetch_overseerr_users() -> Dict[str, Dict[str, Any]]:
 
             plex_username = user.get('plexUsername')
             if plex_username is None:
-                logger.warning(
-                    f"User {user.get('displayName', user.get('email', user.get('id', 'Unknown')))} has no 'plexUsername'. Skipping for mapping.")
+                # Log debug instead of warning for users without Plex usernames to reduce noise
+                logger.debug(
+                    f"User {user.get('displayName', user.get('email', 'Unknown'))} has no 'plexUsername'. Skipping.")
                 continue
 
             normalized_px_username = normalize_plex_username(plex_username)
@@ -99,6 +109,7 @@ async def fetch_overseerr_users() -> Dict[str, Dict[str, Any]]:
             f"An unexpected error occurred during Overseerr user sync: {e}", exc_info=True)
     return {}
 
+
 def get_discord_user_ids_for_tags(media_tags: list) -> Set[str]:
     """
     Returns a set of Discord user IDs to notify based on matching Sonarr tags.
@@ -109,7 +120,10 @@ def get_discord_user_ids_for_tags(media_tags: list) -> Set[str]:
         return users_to_notify
 
     normalized_media_tags = [tag.lower() for tag in media_tags]
-    user_map = bot_config.get("user_mappings", {}).get("plex_to_discord", {})
+
+    # FIXED: Access dataclass attributes directly instead of using .get()
+    # bot_config is a BotConfig object, user_mappings is a UserMappings object
+    user_map = bot_config.user_mappings.plex_to_discord
 
     for username, discord_id in user_map.items():
         normalized_username = username.lower()
