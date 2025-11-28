@@ -225,8 +225,8 @@ async def radarr_webhook_detailed():
         release_date = movie_data.get(
             'inCinemas') or movie_data.get('physicalRelease')
         if release_date:
-             embed.add_field(name="Release Date",
-                             value=release_date, inline=True)
+            embed.add_field(name="Release Date",
+                            value=release_date, inline=True)
 
         # Images (Prefer TMDB, fallback to payload)
         poster_path = tmdb_details.get('poster_path')
@@ -254,4 +254,109 @@ async def radarr_webhook_detailed():
 
         asyncio.run_coroutine_threadsafe(
             send_discord_notification(
-                bot_instance, config, user_ids_to_notify, mentions,
+                bot_instance, config, user_ids_to_notify, mentions, config.discord.radarr_notification_channel_id, embed
+            ),
+            bot_instance.loop,
+        )
+        return jsonify({"status": "success"}), 200
+    except Exception as e:
+        logger.error(f"Error processing Radarr webhook: {e}", exc_info=True)
+        return jsonify({"status": "error", "message": "Internal server error"}), 500
+
+
+@app.route('/webhook/sonarr', methods=['POST'])
+async def sonarr_webhook():
+    """Handles Sonarr's 'On Grab' and 'On Download' webhook events with debouncing."""
+    try:
+        payload = request.json
+        if not payload:
+            return jsonify({"status": "error", "message": "No JSON payload received"}), 400
+
+        bot_instance = app.config.get('discord_bot')
+        if not bot_instance:
+            return jsonify({"status": "error", "message": "Internal server error"}), 500
+
+        config = bot_instance.config
+
+        if payload.get('eventType') not in ['Download', 'EpisodeImport', 'Grab']:
+            return jsonify({"status": "ignored", "reason": "Unsupported event type"}), 200
+
+        series_data = payload.get('series', {})
+        series_id = series_data.get('id')
+        if not series_id:
+            return jsonify({"status": "error", "message": "Missing series ID"}), 400
+
+        # Extract Quality (Try multiple locations in payload)
+        quality = "N/A"
+        if 'episodeFile' in payload and 'quality' in payload['episodeFile']:
+            quality = payload['episodeFile']['quality']
+        elif 'release' in payload and 'quality' in payload['release']:
+            quality = payload['release']['quality']
+
+        for episode_data in payload.get('episodes', []):
+            unique_id = (series_id, episode_data.get('id'))
+            if unique_id in NOTIFIED_EPISODES_CACHE:
+                continue
+
+            EPISODE_NOTIFICATION_BUFFER[series_id].append({
+                "episode_data": episode_data,
+                "episode_unique_id": unique_id,
+                "series_data_ref": series_data,
+                "quality": quality  # Store quality for the embed builder
+            })
+
+        if series_id in SERIES_NOTIFICATION_TIMERS:
+            SERIES_NOTIFICATION_TIMERS[series_id].cancel()
+
+        SERIES_NOTIFICATION_TIMERS[series_id] = bot_instance.loop.call_later(
+            DEBOUNCE_SECONDS,
+            lambda: asyncio.run_coroutine_threadsafe(
+                _process_and_send_buffered_notifications(
+                    series_id, bot_instance, config.discord.sonarr_notification_channel_id),
+                bot_instance.loop,
+            ),
+        )
+        return jsonify({"status": "success"}), 200
+    except Exception as e:
+        logger.error(f"Error processing Sonarr webhook: {e}", exc_info=True)
+        return jsonify({"status": "error", "message": "Internal server error"}), 500
+
+# --- Service Setup ---
+
+
+async def start_overseerr_user_sync(bot_instance: discord.Client):
+    """Periodically syncs users from Overseerr."""
+    config = bot_instance.config
+    while True:
+        global OVERSEERR_USERS_DATA
+        OVERSEERR_USERS_DATA = await fetch_overseerr_users()
+        await asyncio.sleep(config.overseerr.refresh_interval_minutes * 60)
+
+
+def run_webhook_server(bot_instance: discord.Client):
+    """Starts the Flask server in a separate thread."""
+    app.config['discord_bot'] = bot_instance
+    app.run(host='0.0.0.0', port=5000, debug=False)
+
+
+async def setup_media_watcher_service(bot_instance: discord.Client):
+    """Initializes the media watcher service."""
+    config = bot_instance.config
+    if not config.discord.sonarr_notification_channel_id:
+        logger.warning(
+            "Sonarr notification channel not set. Sonarr notifications will be disabled.")
+    if not config.discord.radarr_notification_channel_id:
+        logger.warning(
+            "Radarr notification channel not set. Radarr notifications will be disabled.")
+
+    if config.overseerr.enabled:
+        logger.info("Overseerr integration is enabled. Starting user sync.")
+        bot_instance.loop.create_task(start_overseerr_user_sync(bot_instance))
+    else:
+        logger.info("Overseerr integration is disabled.")
+
+    import threading
+    threading.Thread(target=run_webhook_server, args=(
+        bot_instance,), daemon=True).start()
+    logger.info(
+        "Flask webhook server started in a background thread on port 5000.")
