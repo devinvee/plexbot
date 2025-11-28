@@ -171,7 +171,10 @@ async def _process_and_send_buffered_notifications(series_id: str, bot_instance:
 
         mentions_text = ""
         if users_to_ping:
-            mentions_text = " ".join([f"<@{uid}>" for uid in users_to_ping])
+            ping_string = " ".join([f"<@{uid}>" for uid in users_to_ping])
+
+            title = series_data.get('title', 'Unknown Series')
+            mentions_text = f"**{title}** is now available! {ping_string}"
             logger.info(
                 f"Sonarr Notification: Tagging users {users_to_ping} based on tags {user_tags}")
 
@@ -283,9 +286,15 @@ async def radarr_webhook_detailed():
         # --- Tagging ---
         user_tags = movie_data.get('tags', [])
         user_ids_to_notify = get_discord_user_ids_for_tags(user_tags)
+
         mentions = ""
         if user_ids_to_notify:
-            mentions = " ".join([f"<@{uid}>" for uid in user_ids_to_notify])
+            ping_string = " ".join([f"<@{uid}>" for uid in user_ids_to_notify])
+            title = movie_data.get('title', 'Unknown Movie')
+
+            # Combine Title + Pings
+            mentions = f"New Movie: **{title}** {ping_string}"
+
             logger.info(
                 f"Radarr Notification: Tagging users {user_ids_to_notify} based on tags {user_tags}")
 
