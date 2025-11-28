@@ -52,6 +52,7 @@ async def send_discord_notification(
             channel = bot_instance.get_channel(int(channel_id))
             if channel:
                 await channel.send(content=message_content or None, embed=embed)
+                logger.info(f"Sent notification to channel {channel_id}")
             else:
                 logger.warning(
                     f"Could not find notification channel with ID: {channel_id}")
@@ -74,11 +75,14 @@ async def send_discord_notification(
 
 async def _process_and_send_buffered_notifications(series_id: str, bot_instance: discord.Client, channel_id: str):
     """Processes buffered episodes for a series and sends a single notification."""
+    logger.info(
+        f"Processing buffered notifications for series_id: {series_id}")
     buffered_items = EPISODE_NOTIFICATION_BUFFER.pop(series_id, [])
     if series_id in SERIES_NOTIFICATION_TIMERS:
         SERIES_NOTIFICATION_TIMERS.pop(series_id).cancel()
 
     if not buffered_items:
+        logger.warning(f"No buffered items found for series_id: {series_id}")
         return
 
     # Mark as notified
@@ -168,19 +172,25 @@ async def _process_and_send_buffered_notifications(series_id: str, bot_instance:
 @app.route('/webhook/radarr', methods=['POST'])
 async def radarr_webhook_detailed():
     """Handles Radarr's 'On Grab' and 'On Download' webhook events."""
+    logger.info("Received Radarr webhook request")
     try:
         payload = request.json
         if not payload:
+            logger.error("No JSON payload received in Radarr webhook")
             return jsonify({"status": "error", "message": "No JSON payload received"}), 400
 
         bot_instance = app.config.get('discord_bot')
         if not bot_instance:
+            logger.error("Discord bot instance missing in Flask config")
             return jsonify({"status": "error", "message": "Internal server error"}), 500
 
         config = bot_instance.config
         tmdb_api_key = config.tmdb.api_key
 
-        if payload.get('eventType') not in ['Download', 'Grab']:
+        event_type = payload.get('eventType')
+        logger.info(f"Radarr Event Type: {event_type}")
+
+        if event_type not in ['Download', 'Grab']:
             return jsonify({"status": "ignored", "reason": "Unsupported event type"}), 200
 
         movie_data = payload.get('movie', {})
@@ -189,8 +199,9 @@ async def radarr_webhook_detailed():
 
         # Deduplication
         unique_key = (movie_data.get('tmdbId'), movie_file_data.get(
-            'relativePath', 'unknown'), payload.get('eventType'))
+            'relativePath', 'unknown'), event_type)
         if unique_key in NOTIFIED_MOVIES_CACHE:
+            logger.info(f"Duplicate Radarr event ignored: {unique_key}")
             return jsonify({"status": "ignored", "message": "Duplicate event"}), 200
         NOTIFIED_MOVIES_CACHE.append(unique_key)
 
@@ -272,23 +283,36 @@ async def radarr_webhook_detailed():
 @app.route('/webhook/sonarr', methods=['POST'])
 async def sonarr_webhook():
     """Handles Sonarr's 'On Grab' and 'On Download' webhook events with debouncing."""
+    logger.info("Received Sonarr webhook request")
     try:
         payload = request.json
         if not payload:
+            logger.error("No JSON payload received in Sonarr webhook")
             return jsonify({"status": "error", "message": "No JSON payload received"}), 400
 
         bot_instance = app.config.get('discord_bot')
         if not bot_instance:
+            logger.error("Discord bot instance missing in Flask config")
             return jsonify({"status": "error", "message": "Internal server error"}), 500
 
         config = bot_instance.config
 
-        if payload.get('eventType') not in ['Download', 'EpisodeImport', 'Grab']:
+        event_type = payload.get('eventType')
+        logger.info(f"Sonarr Event Type: {event_type}")
+
+        # ADDED 'Test' to supported events so you can see logs when testing!
+        if event_type not in ['Download', 'EpisodeImport', 'Grab', 'Test']:
+            logger.info(f"Ignored Sonarr event type: {event_type}")
             return jsonify({"status": "ignored", "reason": "Unsupported event type"}), 200
+
+        if event_type == 'Test':
+            logger.info("Processing Sonarr Test Event")
+            return jsonify({"status": "success", "message": "Test event received"}), 200
 
         series_data = payload.get('series', {})
         series_id = series_data.get('id')
         if not series_id:
+            logger.error("Missing series ID in Sonarr payload")
             return jsonify({"status": "error", "message": "Missing series ID"}), 400
 
         # Extract Quality
@@ -301,6 +325,8 @@ async def sonarr_webhook():
         for episode_data in payload.get('episodes', []):
             unique_id = (series_id, episode_data.get('id'))
             if unique_id in NOTIFIED_EPISODES_CACHE:
+                logger.info(
+                    f"Skipping duplicate episode notification: {unique_id}")
                 continue
 
             EPISODE_NOTIFICATION_BUFFER[series_id].append({
@@ -323,6 +349,8 @@ async def sonarr_webhook():
             asyncio.run_coroutine_threadsafe(coro, bot_instance.loop)
 
         # Schedule the debounce timer
+        logger.info(
+            f"Scheduling notification for series {series_id} in {DEBOUNCE_SECONDS} seconds")
         SERIES_NOTIFICATION_TIMERS[series_id] = bot_instance.loop.call_later(
             DEBOUNCE_SECONDS,
             schedule_notification
@@ -348,6 +376,8 @@ async def start_overseerr_user_sync(bot_instance: discord.Client):
 def run_webhook_server(bot_instance: discord.Client):
     """Starts the Flask server in a separate thread."""
     app.config['discord_bot'] = bot_instance
+    # Ensure Flask logs errors to stdout
+    app.logger.setLevel(logging.INFO)
     app.run(host='0.0.0.0', port=5000, debug=False)
 
 
