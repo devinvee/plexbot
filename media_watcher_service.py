@@ -85,50 +85,48 @@ async def _process_and_send_buffered_notifications(series_id: str, bot_instance:
     for item in buffered_items:
         NOTIFIED_EPISODES_CACHE.append(item.get("episode_unique_id", ""))
 
-    # Use the first item for series metadata, but combine episode specific data
+    # Use the first item for series metadata
     latest_item = buffered_items[-1]
     series_data = latest_item.get('series_data_ref', {})
     episode_data = latest_item.get('episode_data', {})
     quality_string = latest_item.get('quality', 'N/A')
 
-    # --- Build Rich Embed (Restoring the "Top" Look) ---
+    # --- Build Rich Embed (Sonarr) ---
     embed = discord.Embed(color=0x00A4DC)  # Sonarr Blue
     embed.set_author(name="New Episode Available - Sonarr",
                      icon_url="https://i.imgur.com/tV61XQZ.png")
 
-    # Title: Series Name (Year) (SxxExx)
-    season_num = episode_data.get('seasonNumber')
-    episode_num = episode_data.get('episodeNumber')
+    # Title
+    season_num = episode_data.get('seasonNumber', 0)
+    episode_num = episode_data.get('episodeNumber', 0)
     ep_string = f"S{season_num:02d}E{episode_num:02d}"
 
     embed.title = f"{series_data.get('title', 'Unknown Series')} ({series_data.get('year', 'N/A')}) ({ep_string})"
 
-    # Episode Info Field
+    # Episode Info
     episode_title = episode_data.get('title', 'Unknown Title')
     embed.add_field(name=f"Latest: {episode_title}",
                     value=ep_string, inline=False)
 
-    # Overview Field
+    # Overview
     overview = episode_data.get('overview', '')
     if overview:
-        # Truncate if too long to prevent errors
         if len(overview) > 1000:
             overview = overview[:997] + "..."
         embed.add_field(name="Overview (Latest)", value=overview, inline=False)
 
-    # Details Row
+    # Details
     air_date = episode_data.get('airDate', 'N/A')
     embed.add_field(name="Air Date", value=air_date, inline=True)
     embed.add_field(name="Quality", value=quality_string, inline=True)
 
-    # Footer with batch info
+    # Footer
     ep_count = len(buffered_items)
     timestamp_str = datetime.now().strftime("%H:%M")
     embed.set_footer(
         text=f"{ep_count} episode(s) in this batch notification. • Today at {timestamp_str}")
 
     # Images
-    # Try to find a banner/fanart for the main image, and poster for thumbnail
     images = series_data.get('images', [])
     poster_url = None
     fanart_url = None
@@ -150,10 +148,11 @@ async def _process_and_send_buffered_notifications(series_id: str, bot_instance:
 
     mentions_text = ""
     if users_to_ping:
-        mentions_text = " ".join(f"<@{uid}>" for uid in users_to_ping)
+        mentions_text = " ".join([f"<@{uid}>" for uid in users_to_ping])
         logger.info(
             f"Sonarr Notification: Tagging users {users_to_ping} based on tags {user_tags}")
 
+    # Send Notification
     await send_discord_notification(
         bot_instance=bot_instance,
         config=bot_instance.config,
@@ -248,16 +247,22 @@ async def radarr_webhook_detailed():
         user_ids_to_notify = get_discord_user_ids_for_tags(user_tags)
         mentions = ""
         if user_ids_to_notify:
-            mentions = " ".join(f"<@{uid}>" for uid in user_ids_to_notify)
+            mentions = " ".join([f"<@{uid}>" for uid in user_ids_to_notify])
             logger.info(
                 f"Radarr Notification: Tagging users {user_ids_to_notify} based on tags {user_tags}")
 
-        asyncio.run_coroutine_threadsafe(
-            send_discord_notification(
-                bot_instance, config, user_ids_to_notify, mentions, config.discord.radarr_notification_channel_id, embed
-            ),
-            bot_instance.loop,
+        # Construct notification coroutine
+        coro = send_discord_notification(
+            bot_instance,
+            config,
+            user_ids_to_notify,
+            mentions,
+            config.discord.radarr_notification_channel_id,
+            embed
         )
+        # Schedule it safely
+        asyncio.run_coroutine_threadsafe(coro, bot_instance.loop)
+
         return jsonify({"status": "success"}), 200
     except Exception as e:
         logger.error(f"Error processing Radarr webhook: {e}", exc_info=True)
@@ -286,7 +291,7 @@ async def sonarr_webhook():
         if not series_id:
             return jsonify({"status": "error", "message": "Missing series ID"}), 400
 
-        # Extract Quality (Try multiple locations in payload)
+        # Extract Quality
         quality = "N/A"
         if 'episodeFile' in payload and 'quality' in payload['episodeFile']:
             quality = payload['episodeFile']['quality']
@@ -302,20 +307,27 @@ async def sonarr_webhook():
                 "episode_data": episode_data,
                 "episode_unique_id": unique_id,
                 "series_data_ref": series_data,
-                "quality": quality  # Store quality for the embed builder
+                "quality": quality
             })
 
         if series_id in SERIES_NOTIFICATION_TIMERS:
             SERIES_NOTIFICATION_TIMERS[series_id].cancel()
 
+        # Define a safe callback function for call_later
+        def schedule_notification():
+            coro = _process_and_send_buffered_notifications(
+                series_id,
+                bot_instance,
+                config.discord.sonarr_notification_channel_id
+            )
+            asyncio.run_coroutine_threadsafe(coro, bot_instance.loop)
+
+        # Schedule the debounce timer
         SERIES_NOTIFICATION_TIMERS[series_id] = bot_instance.loop.call_later(
             DEBOUNCE_SECONDS,
-            lambda: asyncio.run_coroutine_threadsafe(
-                _process_and_send_buffered_notifications(
-                    series_id, bot_instance, config.discord.sonarr_notification_channel_id),
-                bot_instance.loop,
-            ),
+            schedule_notification
         )
+
         return jsonify({"status": "success"}), 200
     except Exception as e:
         logger.error(f"Error processing Sonarr webhook: {e}", exc_info=True)
