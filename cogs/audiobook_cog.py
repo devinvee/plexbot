@@ -6,6 +6,7 @@ import os
 import asyncio
 import json
 import re
+from difflib import SequenceMatcher
 from mutagen.id3 import ID3, TIT1, ID3NoHeaderError
 from mutagen.mp4 import MP4
 from typing import List, Dict, Optional, Set
@@ -18,14 +19,18 @@ logger = logging.getLogger(__name__)
 class BookSelect(discord.ui.Select):
     def __init__(self, books: List[Dict]):
         options = []
-        # Limit to top 5 results
         for i, book in enumerate(books[:5]):
-            # Support both Google Books and Open Library result formats for display
+            # Handle both Google Books and Open Library formats
             title = book.get('title') or book.get(
                 'volumeInfo', {}).get('title', 'Unknown')
+
+            # Extract authors safely from either format
             authors_list = book.get('author_name') or book.get(
                 'volumeInfo', {}).get('authors', [])
-            authors = ", ".join(authors_list)[:50]
+            if isinstance(authors_list, list):
+                authors = ", ".join(authors_list)[:50]
+            else:
+                authors = str(authors_list)[:50]
 
             options.append(discord.SelectOption(
                 label=title[:90],
@@ -42,9 +47,13 @@ class BookSelect(discord.ui.Select):
         selected_book = self.books[selected_index]
         self.view.stop()
         await interaction.response.defer()
+
+        # We pass the selected book as BOTH gb and ol result to force processing
+        # The logic handles the format difference
         await self.view.cog.finalize_tagging(
             interaction,
-            selected_book,
+            [selected_book],  # Treat as GB result list
+            [selected_book],  # Treat as OL result list
             self.view.file_path,
             self.view.readarr_metadata
         )
@@ -83,11 +92,10 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
     async def process_readarr_event(self, payload: Dict):
         """Main entry point from the webhook."""
 
-        # Debug Dump
+        # Debug Dump (Optional)
         try:
-            # Only dump relevant info to keep logs cleaner, or full payload if debugging needed
-            logger.info(
-                f"📥 READARR PAYLOAD DUMP:\n{json.dumps(payload, indent=4)}")
+            # logger.info(f"📥 READARR PAYLOAD DUMP:\n{json.dumps(payload, indent=4)}")
+            pass
         except:
             pass
 
@@ -134,15 +142,10 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
             f"Processing Audiobook ({event_type}): {title} by {author}")
 
         # 3. Parallel API Search (OpenLibrary + Google Books)
-        # We fetch from both to get the best chance of finding series info
         results_ol, results_gb = await asyncio.gather(
             self.search_openlibrary(title, author),
             self.search_google_books(title, author)
         )
-
-        # Prefer OpenLibrary results for metadata if available, as they have structured series data
-        # But Google Books is often better for exact Title matching.
-        # We'll use Google Books for the "Match" object but extract series from both.
 
         primary_match = None
         if results_gb:
@@ -150,21 +153,22 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
         elif results_ol:
             primary_match = results_ol[0]
 
+        match_confidence = 0.0
+
         if not primary_match:
-            logger.warning(f"No API results found for {title}. Skipping.")
-            return
+            logger.warning(
+                f"No API results found for {title}. Proceeding with folder logic only.")
+            match_confidence = 1.0  # Trust Readarr/Folder logic if API fails
+        else:
+            # 4. Confidence Check
+            match_title = primary_match.get('volumeInfo', {}).get(
+                'title') or primary_match.get('title')
+            match_confidence = self.calculate_confidence(
+                title, author, match_title)
 
-        # 4. Confidence Check
-        # We use the primary match (likely Google Books) to check if we found the right book
-        match_title = primary_match.get('volumeInfo', {}).get(
-            'title') or primary_match.get('title')
-        match_confidence = self.calculate_confidence(
-            title, author, match_title)
-
-        if match_confidence > 0.90:
+        if match_confidence > 0.85:
             logger.info(
                 f"High confidence match ({match_confidence}). Tagging automatically.")
-            # Pass both result sets to the tagging function
             await self.finalize_tagging(None, results_gb, results_ol, file_path, payload)
 
         elif event_type == 'Rename':
@@ -174,13 +178,15 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
         else:
             logger.info(
                 f"Low confidence ({match_confidence}). Requesting user approval.")
-            # We present Google Books results to user as they usually look better
+            # Present Google Books results if available (better covers/titles usually), else OL
             await self.request_manual_approval(results_gb or results_ol, title, author, file_path, payload)
 
     async def search_google_books(self, title: str, author: str) -> List[Dict]:
         """Queries Google Books API."""
-        query = f"intitle:{title}+inauthor:{author}"
-        url = f"https://www.googleapis.com/books/v1/volumes?q={query}&maxResults=5"
+        import urllib.parse
+        q_title = urllib.parse.quote(title)
+        q_author = urllib.parse.quote(author)
+        url = f"https://www.googleapis.com/books/v1/volumes?q=intitle:{q_title}+inauthor:{q_author}&maxResults=5"
         if self.google_api_key:
             url += f"&key={self.google_api_key}"
 
@@ -197,7 +203,6 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
 
     async def search_openlibrary(self, title: str, author: str) -> List[Dict]:
         """Queries Open Library API (Excellent for series info)."""
-        # Encode parameters
         import urllib.parse
         q_title = urllib.parse.quote(title)
         q_author = urllib.parse.quote(author)
@@ -224,7 +229,9 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
             return 1.0
         if r_title in match_title:
             return 0.95
-        return 0.5
+
+        matcher = SequenceMatcher(None, r_title, match_title)
+        return matcher.ratio()
 
     async def request_manual_approval(self, results, title, author, file_path, payload):
         channel_id = os.getenv("READARR_CHANNEL_ID")
@@ -247,49 +254,62 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
             pass
 
     async def finalize_tagging(self, interaction, gb_results, ol_results, file_path, readarr_payload):
-        """
-        Dynamically extracts series from all available sources and applies tags.
-        """
         found_series: Set[str] = set()
 
-        # 1. Readarr (Primary Source)
+        # --- 1. Readarr Metadata (Primary Source) ---
         readarr_series = readarr_payload.get('series', {}).get('title')
         if readarr_series:
             found_series.add(readarr_series)
 
-        # 2. Open Library (Dynamic Source)
-        # We look at the first few results to gather series names
+        # --- 2. Open Library (Dynamic Multi-Series Source) ---
+        # This is where the magic happens for multiple series
         if ol_results:
-            # Use the top match
-            doc = ol_results[0]
-            if 'series' in doc:
-                for s in doc['series']:
-                    found_series.add(s)
+            # Check the top 2 results to be safe
+            for doc in ol_results[:2]:
+                if 'series' in doc:  # 'series' is a LIST in Open Library
+                    for s in doc['series']:
+                        found_series.add(s)
 
-        # 3. Google Books (Dynamic Source)
+        # --- 3. Google Books (Dynamic Subtitle Source) ---
         if gb_results:
             vol = gb_results[0].get('volumeInfo', {})
             subtitle = vol.get('subtitle', '')
-
-            # Dynamic Regex Parsing for Subtitles
-            # Looks for patterns like "Book 1 of The Expanse" or "The Expanse, Book 1"
             if subtitle:
-                # Common pattern: "The Wheel of Time, Book 1"
-                if "Book" in subtitle or "Vol" in subtitle:
-                    # Remove "Book X" and keep the rest
-                    clean_series = re.sub(
-                        r'[,:]?\s*(Book|Vol\.?|Volume)\s*\d+', '', subtitle, flags=re.IGNORECASE).strip()
-                    if clean_series:
-                        found_series.add(clean_series)
-                else:
-                    # Sometimes the subtitle IS the series name (e.g. "A Jack Reacher Novel")
-                    found_series.add(subtitle)
+                # Remove "Book X" and just keep the series name
+                clean_series = re.sub(
+                    r'[,:]?\s*(?:Book|Vol\.?|Volume|#)\s*\d+', '', subtitle, flags=re.IGNORECASE).strip()
+                if clean_series and len(clean_series) > 2:
+                    found_series.add(clean_series)
 
-        # Filter out junk
+        # --- 4. Folder Structure (Fallback) ---
+        r_author = readarr_payload.get('author', {}).get('name', '').lower()
+        r_book_title = readarr_payload.get('book', {}).get('title', '').lower()
+
+        if file_path:
+            try:
+                path_parts = os.path.normpath(file_path).split(os.sep)
+                author_idx = -1
+                for i, part in enumerate(path_parts):
+                    if r_author in part.lower() or part.lower() in r_author:
+                        author_idx = i
+                        break
+
+                if author_idx != -1 and author_idx + 1 < len(path_parts):
+                    potential_series_folder = path_parts[author_idx + 1]
+                    # If the folder name is NOT the book title, it's likely a series folder
+                    similarity = SequenceMatcher(
+                        None, potential_series_folder.lower(), r_book_title).ratio()
+                    if similarity < 0.6:
+                        logger.info(
+                            f"Detected series from folder path: {potential_series_folder}")
+                        found_series.add(potential_series_folder)
+            except Exception as e:
+                logger.error(f"Path parsing failed: {e}")
+
+        # --- Format and Apply ---
         clean_tags = []
         for s in found_series:
             s = s.strip()
-            # Ignore empty or overly long/description-like tags
             if len(s) > 2 and len(s) < 100:
                 clean_tags.append(s)
 
