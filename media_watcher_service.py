@@ -208,8 +208,8 @@ async def readarr_webhook():
         if event_type not in ['Download', 'Upgrade', 'Rename', 'Test']:  # Added 'Rename'
             return jsonify({"status": "ignored", "reason": "Unsupported event type"}), 200
 
-      bot_instance = app.config.get('discord_bot')
-       if not bot_instance:
+        bot_instance = app.config.get('discord_bot')
+        if not bot_instance:
             return jsonify({"status": "error", "message": "Bot instance missing"}), 500
 
         # Dispatch the event to the new AudiobookCog
