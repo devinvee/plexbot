@@ -21,11 +21,11 @@ class BookSelect(discord.ui.Select):
             vol = book.get('volumeInfo', {})
             title = vol.get('title', 'Unknown')[:90]
             authors = ", ".join(vol.get('authors', []))[:50]
-            # Store the Google ID as the value
+            # Store the index as the value so we can retrieve the full object later
             options.append(discord.SelectOption(
                 label=title,
                 description=f"by {authors}",
-                value=str(i)  # We'll use index to retrieve full object later
+                value=str(i)
             ))
 
         super().__init__(placeholder="Select the correct book match...",
@@ -40,7 +40,7 @@ class BookSelect(discord.ui.Select):
         self.view.stop()
         await interaction.response.defer()
 
-        # Call the processing function on the View's parent (the Cog logic)
+        # Call the processing function on the Cog logic
         await self.view.cog.finalize_tagging(
             interaction,
             selected_book,
@@ -65,6 +65,23 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
         self.bot = bot
         self.google_api_key = os.getenv("GOOGLE_BOOKS_API_KEY")
 
+    # --- Commands ---
+
+    @commands.hybrid_command(name="absscan", description="Force a scan of the Audiobookshelf library.")
+    @commands.is_owner()  # Or @commands.has_permissions(administrator=True) if you prefer
+    async def absscan_command(self, ctx: commands.Context):
+        """Manually triggers a library scan."""
+        await ctx.defer()
+
+        success = await self.trigger_abs_scan()
+
+        if success:
+            await ctx.send("✅ **Audiobookshelf Scan Initiated.**")
+        else:
+            await ctx.send("❌ **Scan Failed.** Check bot logs and environment variables.")
+
+    # --- Core Logic ---
+
     async def process_readarr_event(self, payload: Dict):
         """Main entry point from the webhook."""
         if payload.get('eventType') == 'Test':
@@ -76,15 +93,18 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
         file_info = payload.get('bookFile', {})
 
         title = book_info.get('title')
-        # Readarr sometimes puts author at top level
+        # Readarr sometimes puts author at top level, sometimes inside book
         author = payload.get('author', {}).get('name')
-        # Fallback for author location
         if not author:
             author = book_info.get('authorTitle')
 
         file_path = file_info.get('path')
 
         # Ensure path exists (Docker volume mapping check)
+        if not file_path:
+            logger.error("No file path provided in Readarr payload.")
+            return
+
         if not os.path.exists(file_path):
             logger.error(
                 f"File not found at {file_path}. Check Docker volume mappings.")
@@ -96,8 +116,9 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
         results = await self.search_google_books(title, author)
 
         if not results:
-            logger.warning(f"No Google Books results found for {title}.")
-            # Fallback: Just tag with Readarr data? Or notify failure?
+            logger.warning(
+                f"No Google Books results found for {title}. Skipping tagging.")
+            # Optional: You could notify Discord here that no match was found.
             return
 
         # 3. Confidence Check
@@ -121,22 +142,28 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
         if self.google_api_key:
             url += f"&key={self.google_api_key}"
 
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    return data.get('items', [])
-                return []
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        return data.get('items', [])
+                    else:
+                        logger.error(f"Google Books API Error: {resp.status}")
+                        return []
+        except Exception as e:
+            logger.error(f"Error searching Google Books: {e}")
+            return []
 
     def calculate_confidence(self, r_title, r_author, g_result) -> float:
         """Crude string matching confidence."""
         g_title = g_result.get('title', '').lower()
-        r_title = r_title.lower()
+        r_title = r_title.lower() if r_title else ""
 
-        # If exact title match
+        # Exact title match
         if r_title == g_title:
             return 1.0
-        # If Readarr title is contained in Google title (e.g. "Mistborn" in "Mistborn: The Final Empire")
+        # Substring match (e.g. "Mistborn" in "Mistborn: The Final Empire")
         if r_title in g_title:
             return 0.95
 
@@ -144,53 +171,59 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
 
     async def request_manual_approval(self, results, title, author, file_path, payload):
         """Sends an embed to Discord for the user to pick."""
-        channel_id = self.bot.config.discord.sonarr_notification_channel_id  # Reusing Sonarr channel or define new one
+        # CHANGED: Look for READARR_CHANNEL_ID in env, fallback to log warning
+        channel_id = os.getenv("READARR_CHANNEL_ID")
+
         if not channel_id:
-            logger.warning("No notification channel set for approval.")
+            logger.warning(
+                "READARR_CHANNEL_ID not set in .env. Cannot ask for manual approval.")
             return
 
-        channel = self.bot.get_channel(int(channel_id))
+        try:
+            channel = self.bot.get_channel(int(channel_id))
+            if not channel:
+                logger.warning(f"Could not find channel with ID {channel_id}")
+                return
 
-        embed = discord.Embed(
-            title="📚 Metadata Approval Needed",
-            description=f"Readarr imported **{title}** by **{author}**.\nI found multiple potential matches on Google Books. Please select the correct one to apply Series tags.",
-            color=discord.Color.orange()
-        )
+            embed = discord.Embed(
+                title="📚 Metadata Approval Needed",
+                description=f"Readarr imported **{title}** by **{author}**.\nI found multiple potential matches. Please select the correct one to apply Series tags.",
+                color=discord.Color.orange()
+            )
 
-        view = ManualMatchView(results, file_path, payload, self)
-        await channel.send(embed=embed, view=view)
+            view = ManualMatchView(results, file_path, payload, self)
+            await channel.send(embed=embed, view=view)
+        except ValueError:
+            logger.error(f"Invalid READARR_CHANNEL_ID: {channel_id}")
 
     async def finalize_tagging(self, interaction, google_book_data, file_path, readarr_payload):
         """Applies tags and notifies ABS."""
         vol_info = google_book_data.get('volumeInfo', {})
 
         # --- SERIES LOGIC ---
-        # Google Books API is messy with series.
-        # We will try to extract it from 'categories' or 'description' or construct it.
-        # Ideally, you combine this with your 'universes.json' map for maximum power.
-
         series_tags = []
 
-        # 1. Get Primary Series from Readarr (It's usually reliable for the main one)
+        # 1. Get Primary Series from Readarr (Usually reliable for the main series)
         readarr_series = readarr_payload.get('series', {}).get('title')
         if readarr_series:
-            # We assume Readarr knows the sequence from the filename logic
-            # or we just tag the Series Name and let ABS guess the number
             series_tags.append(readarr_series)
 
-        # 2. Check Description/Categories for "Universe" keywords (Cosmere, etc.)
+        # 2. Check Description/Categories for "Universe" keywords
         description = vol_info.get('description', '').lower()
         categories = str(vol_info.get('categories', [])).lower()
 
-        # Example Universe Logic (Expand this!)
+        # Example Universe Logic (Expand this with a dictionary/json map later!)
         if "cosmere" in description or "cosmere" in categories:
             series_tags.append("The Cosmere")
-        if "middle-earth" in description:
+        if "middle-earth" in description or "tolkien" in categories:
             series_tags.append("Legendarium")
+        if "grishaverse" in description:
+            series_tags.append("Grishaverse")
 
-        # Format the tag string for ABS: "Series A; Series B"
+        # Format for ABS: "Series A; Series B"
         tag_string = "; ".join(series_tags)
 
+        msg = ""
         if not tag_string:
             logger.info("No series data found to tag.")
             msg = "No series data found, skipping retag."
@@ -201,7 +234,7 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
         # --- NOTIFICATION ---
         if interaction:
             await interaction.followup.send(f"✅ **Processed!** {msg}")
-            # Delete the selector to clean up chat
+            # Try to delete the selection message to clean up chat
             try:
                 await interaction.message.delete()
             except:
@@ -211,7 +244,7 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
         await self.trigger_abs_scan()
 
     def apply_tags(self, filepath, tag_string):
-        """Writes the CONTENTGROUP tag using mutagen."""
+        """Writes the CONTENTGROUP (grouping) tag using mutagen."""
         try:
             ext = os.path.splitext(filepath)[1].lower()
             if ext == ".mp3":
@@ -219,27 +252,31 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
                     audio = ID3(filepath)
                 except ID3NoHeaderError:
                     audio = ID3()
+                # TIT1 is the ID3v2 frame for "Content Group Description" (Grouping)
                 audio.add(TIT1(encoding=3, text=tag_string))
                 audio.save(filepath)
             elif ext in [".m4b", ".m4a"]:
                 audio = MP4(filepath)
+                # \xa9grp is the atom for "Grouping"
                 audio.tags['\xa9grp'] = tag_string
                 audio.save()
             logger.info(f"Successfully wrote tags to {filepath}")
         except Exception as e:
-            logger.error(f"Tagging failed: {e}")
+            logger.error(f"Tagging failed for {filepath}: {e}")
 
-    async def trigger_abs_scan(self):
-        """Hits the Audiobookshelf API to scan."""
-        # You need to add ABS config to your config.json or .env
-        abs_url = os.getenv("ABS_URL")  # e.g. http://bas:13378
+    async def trigger_abs_scan(self) -> bool:
+        """Hits the Audiobookshelf API to scan the library."""
+        abs_url = os.getenv("ABS_URL")
         abs_token = os.getenv("ABS_TOKEN")
         library_id = os.getenv("ABS_LIBRARY_ID")
 
         if not all([abs_url, abs_token, library_id]):
-            logger.warning("ABS config missing. Cannot trigger scan.")
-            return
+            logger.warning(
+                "ABS config missing (ABS_URL, ABS_TOKEN, or ABS_LIBRARY_ID). Cannot trigger scan.")
+            return False
 
+        # Normalize URL
+        abs_url = abs_url.rstrip('/')
         url = f"{abs_url}/api/libraries/{library_id}/scan"
         headers = {"Authorization": f"Bearer {abs_token}"}
 
@@ -248,10 +285,15 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
                 async with session.post(url, headers=headers) as resp:
                     if resp.status == 200:
                         logger.info("Triggered Audiobookshelf Library Scan.")
+                        return True
                     else:
-                        logger.error(f"Failed to scan ABS: {resp.status}")
+                        text = await resp.text()
+                        logger.error(
+                            f"Failed to scan ABS: {resp.status} - {text}")
+                        return False
         except Exception as e:
             logger.error(f"ABS Scan error: {e}")
+            return False
 
 
 async def setup(bot):
