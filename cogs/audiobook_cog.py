@@ -48,7 +48,6 @@ class BookSelect(discord.ui.Select):
             f"User {interaction.user} selected book index {selected_index}")
         await interaction.response.defer()
 
-        # Pass the selected book as both GB/OL result to force processing
         await self.view.cog.finalize_tagging(
             interaction,
             [selected_book],
@@ -74,7 +73,6 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
     def __init__(self, bot):
         self.bot = bot
         self.google_api_key = os.getenv("GOOGLE_BOOKS_API_KEY")
-        # Default library root based on your logs, can be overridden in .env
         self.library_root = os.getenv("LIBRARY_ROOT", "/mnt/audiobooks/books")
 
     # --- Commands ---
@@ -104,43 +102,72 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
         await ctx.send(f"🔍 **Scanning Author:** `{author_name}`...\nThis may take a while. Check logs for progress.")
 
         processed_count = 0
-
-        # Walk through the author directory
         for root, dirs, files in os.walk(target_dir):
-            # Look for audio files
             audio_files = [f for f in files if f.lower().endswith(
                 ('.m4b', '.mp3', '.m4a', '.flac'))]
-
             if audio_files:
-                # We found a folder with audio files. Assume it's a book.
-                # Use the first audio file as the target
                 target_file = os.path.join(root, audio_files[0])
-
-                # Deduce title from folder name (usually "Series - Book" or just "Book")
                 folder_name = os.path.basename(root)
 
-                # Create a "Mock Payload" that looks like a Readarr webhook
                 mock_payload = {
-                    "eventType": "Rename",  # Use Rename to trigger Silent Mode
-                    "book": {
-                        "title": folder_name,  # Fallback title
-                    },
-                    "author": {
-                        "name": author_name
-                    },
+                    "eventType": "Rename",
+                    "book": {"title": folder_name},
+                    "author": {"name": author_name},
                     "sourcePath": target_file
                 }
 
                 logger.info(f"Auto-scanning found book: {folder_name}")
-
-                # Call the processor directly
-                # We run this serially to avoid rate limits
                 await self.process_readarr_event(mock_payload)
                 processed_count += 1
-                await asyncio.sleep(2)  # Sleep to be nice to APIs
+                await asyncio.sleep(2)
 
-        await ctx.send(f"✅ **Scan Complete.** Processed {processed_count} book folders for **{author_name}**.")
+        await ctx.send(f"✅ **Scan Complete.** Processed {processed_count} books for **{author_name}**.")
         await self.trigger_abs_scan()
+
+    @commands.hybrid_command(name="scanbook", description="Scan a specific book folder for an author.")
+    @commands.is_owner()
+    async def scan_book_command(self, ctx: commands.Context, author: str, book_search: str):
+        """Scans a specific book folder matching the search term."""
+        await ctx.defer()
+
+        author_dir = os.path.join(self.library_root, author)
+        if not os.path.exists(author_dir):
+            await ctx.send(f"❌ **Author folder not found:** `{author_dir}`")
+            return
+
+        # Find a folder that matches the book_search string
+        target_path = None
+        target_file = None
+
+        for root, dirs, files in os.walk(author_dir):
+            folder_name = os.path.basename(root)
+            if book_search.lower() in folder_name.lower():
+                # Check for audio files
+                audio_files = [f for f in files if f.lower().endswith(
+                    ('.m4b', '.mp3', '.m4a', '.flac'))]
+                if audio_files:
+                    target_path = root
+                    target_file = audio_files[0]
+                    break  # Stop at first match
+
+        if not target_path or not target_file:
+            await ctx.send(f"❌ **Book not found.** No folder matching `{book_search}` containing audio files was found in `{author}`.")
+            return
+
+        full_path = os.path.join(target_path, target_file)
+        folder_name = os.path.basename(target_path)
+
+        await ctx.send(f"🔍 **Found:** `{folder_name}`\nProcessing metadata...")
+
+        mock_payload = {
+            "eventType": "Rename",  # Triggers silent/auto mode
+            "book": {"title": folder_name},  # Use folder name as search title
+            "author": {"name": author},
+            "sourcePath": full_path
+        }
+
+        await self.process_readarr_event(mock_payload)
+        await ctx.send(f"✅ **Metadata Updated** for `{folder_name}`.")
 
     # --- Core Logic ---
 
@@ -294,7 +321,6 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
     def extract_sequence_number(self, text: str) -> str:
         if not text:
             return ""
-        # Matches: Book 5, Vol 5, #5, (5), [5]
         match = re.search(
             r'(?:Book|Vol\.?|Volume|#|\[|\()\s*(\d+(\.\d+)?)', text, re.IGNORECASE)
         if match:
@@ -306,7 +332,7 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
         found_series: Set[str] = set()
         meta_data = {}
 
-        # 1. Base Info (Readarr)
+        # 1. Base Info
         r_book = readarr_payload.get('book', {})
         r_title = r_book.get('title')
         r_author = readarr_payload.get('author', {}).get(
@@ -316,7 +342,7 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
         meta_data['authors'] = [r_author] if r_author else []
         meta_data['publishedYear'] = str(r_book.get('releaseDate', ''))[:4]
 
-        # 2. Google Books (Rich Data)
+        # 2. Google Books
         if gb_results:
             vol = gb_results[0].get('volumeInfo', {})
             meta_data['description'] = vol.get('description', '')
@@ -334,7 +360,6 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
             subtitle = vol.get('subtitle', '')
             if subtitle:
                 meta_data['subtitle'] = subtitle
-                # Extract series from subtitle
                 if " of " in subtitle:
                     parts = subtitle.split(" of ")
                     if len(parts) > 1:
@@ -347,20 +372,19 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
                 if clean_name and len(clean_name) > 2:
                     found_series.add(f"{clean_name}{seq_num}")
 
-        # 3. Open Library (Multiple Series)
+        # 3. Open Library
         if ol_results:
             doc = ol_results[0]
             if 'series' in doc:
                 for s in doc['series']:
                     found_series.add(s)
 
-            # Additional Authors
             if 'author_name' in doc and isinstance(doc['author_name'], list):
                 for a in doc['author_name']:
                     if a not in meta_data['authors']:
                         meta_data['authors'].append(a)
 
-        # 4. Folder Logic (Structure)
+        # 4. Folder Logic
         if file_path and r_author:
             try:
                 path_parts = os.path.normpath(file_path).split(os.sep)
@@ -383,34 +407,28 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
             except Exception:
                 pass
 
-        # 5. Narrator Detection (Experimental)
-        # Scan description/subtitle for "Narrated by X"
+        # 5. Narrator
         desc = meta_data.get('description', '')
         narrator_match = re.search(
             r'Narrated by[:\s]+([A-Z][a-z]+ [A-Z][a-z]+)', desc)
         if narrator_match:
             meta_data['narrators'] = [narrator_match.group(1)]
 
-        # Format Series Tags - Keep ALL unique series found
-        # We normalize slightly to prevent duplicates like "Mistborn" vs "Mistborn #1" if we have both
+        # Format Series Tags
         final_series_list = []
-        seen_base_names = {}  # Map "mistborn" -> "#1"
+        seen_base_names = {}
 
-        # Pass 1: Collect
         for tag in found_series:
             match = re.match(r'^(.*?)\s*(#\d+(\.\d+)?)?$', tag)
             if match:
                 name = match.group(1).strip()
                 seq = match.group(2) or ""
-
-                # Strategy: If we find "Mistborn #1" and "Mistborn", prefer the one with sequence
                 key = name.lower()
                 if key not in seen_base_names:
                     seen_base_names[key] = (name, seq)
-                elif seq:  # Upgrade to numbered version
+                elif seq:
                     seen_base_names[key] = (name, seq)
 
-        # Pass 2: Build list
         for name, seq in seen_base_names.values():
             final_series_list.append(f"{name}{seq}")
 
@@ -431,7 +449,6 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
         await self.trigger_abs_scan()
 
     def update_abs_metadata(self, file_path: str, new_data: Dict) -> bool:
-        """Creates or updates the metadata.json file for Audiobookshelf."""
         try:
             book_dir = os.path.dirname(file_path)
             meta_path = os.path.join(book_dir, "metadata.json")
@@ -444,10 +461,8 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
                 except:
                     pass
 
-            # Merge Data - Update everything we found
             current_data['series'] = new_data.get('series', [])
 
-            # Fields to update if we found better data
             fields = ['title', 'subtitle', 'authors', 'narrators', 'description',
                       'publisher', 'publishedYear', 'genres', 'isbn', 'asin', 'language', 'pageCount']
 
@@ -456,7 +471,6 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
                 if val:
                     current_data[field] = val
 
-            # Default empty fields required by ABS
             if 'tags' not in current_data:
                 current_data['tags'] = []
             if 'chapters' not in current_data:
