@@ -90,7 +90,6 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
             logger.info("Readarr Test Event Received.")
             return
 
-        # Support 'Rename' to allow mass-updates from Readarr
         if event_type not in ['Download', 'Upgrade', 'Rename']:
             return
 
@@ -98,7 +97,6 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
         book_info = payload.get('book', {})
         title = book_info.get('title', 'Unknown Title')
 
-        # Author extraction (Readarr varies where this is placed)
         author = payload.get('author', {}).get('name')
         if not author:
             author = book_info.get('authorTitle')
@@ -106,23 +104,30 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
         # 2. Robust Path Extraction
         file_path = None
 
-        # Check standard "Import/Download" location
+        # Priority 1: Standard 'bookFile' (Import/Upgrade)
         if 'bookFile' in payload:
             file_path = payload['bookFile'].get('path')
 
-        # Check "Rename" location (Readarr sends a list of files)
+        # Priority 2: 'renamedBookFiles' (Mass Editor / Rename)
         elif 'renamedBookFiles' in payload and len(payload['renamedBookFiles']) > 0:
-            # Use the first file in the list
             file_path = payload['renamedBookFiles'][0].get('path')
 
-        # Check generic "sourcePath" (common fallback)
+        # Priority 3: 'sourcePath' (Fallback)
         elif 'sourcePath' in payload:
             file_path = payload['sourcePath']
 
-        # Debugging: Log if path is missing to help troubleshooting
+        # Debugging Block: If path is missing, log detailed info
         if not file_path:
             logger.error(
                 f"❌ Could not find file path for '{title}'. Event: {event_type}")
+            logger.error(f"Available Keys in Payload: {list(payload.keys())}")
+
+            if 'bookFile' in payload:
+                logger.error(f"Content of 'bookFile': {payload['bookFile']}")
+            elif 'renamedBookFiles' in payload:
+                logger.error(
+                    f"Content of 'renamedBookFiles': {payload['renamedBookFiles']}")
+
             return
 
         if not os.path.exists(file_path):
@@ -235,7 +240,7 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
         description = vol_info.get('description', '').lower()
         categories = str(vol_info.get('categories', [])).lower()
 
-        # Example Universe Logic (Expand this logic here!)
+        # Example Universe Logic (Expand this with a dictionary/json map later!)
         if "cosmere" in description or "cosmere" in categories:
             series_tags.append("The Cosmere")
         if "middle-earth" in description or "tolkien" in categories:
