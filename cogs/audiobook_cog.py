@@ -48,6 +48,7 @@ class BookSelect(discord.ui.Select):
             f"User {interaction.user} selected book index {selected_index}")
         await interaction.response.defer()
 
+        # Pass selected book as both sources to force processing
         await self.view.cog.finalize_tagging(
             interaction,
             [selected_book],
@@ -206,9 +207,9 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
         book_info = payload.get('book', {})
         raw_title = book_info.get('title', 'Unknown Title')
 
-        # CLEANUP TITLE: Remove [2], (2018), etc from title for better searching
-        title = re.sub(r'^\[\d+\]\s*', '', raw_title)  # Remove leading [2]
-        title = re.sub(r'\s*\(\d{4}\).*$', '', title)  # Remove trailing (2018)
+        # Cleanup Title: remove [2] or (2021)
+        title = re.sub(r'^\[\d+\]\s*', '', raw_title)
+        title = re.sub(r'\s*\(\d{4}\).*$', '', title)
         title = title.strip()
 
         author = payload.get('author', {}).get('name')
@@ -254,7 +255,7 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
             match_confidence = self.calculate_confidence(
                 title, author, match_title)
 
-        # Inject cleaned title back into payload so finalize_tagging uses it
+        # Inject cleaned title
         payload['book']['title'] = title
 
         if match_confidence > 0.85:
@@ -323,6 +324,7 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
         """Finds #5, Book 5, [5], etc."""
         if not text:
             return ""
+        # Look for [1], (1), #1, Book 1
         match = re.search(
             r'(?:Book|Vol\.?|Volume|#|\[|\()\s*(\d+(\.\d+)?)', text, re.IGNORECASE)
         if match:
@@ -330,6 +332,7 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
         return ""
 
     async def finalize_tagging(self, interaction, gb_results, ol_results, file_path, readarr_payload):
+        logger.info(f"Generating rich metadata for: {file_path}")
         found_series: Set[str] = set()
         meta_data = {}
 
@@ -343,13 +346,68 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
         meta_data['authors'] = [r_author] if r_author else []
         meta_data['publishedYear'] = str(r_book.get('releaseDate', ''))[:4]
 
-        # 2. Google Books
+        # ----------------------------------------------------
+        # PRIMARY SEQUENCE LOGIC (From Folder [1])
+        # ----------------------------------------------------
+        primary_sequence = ""
+        readarr_series_name = readarr_payload.get('series', {}).get('title')
+
+        if file_path:
+            try:
+                # Look specifically for [1] in the folder path
+                path_parts = os.path.normpath(file_path).split(os.sep)
+                # Reverse iterate to find book folder first (closest to file)
+                for part in reversed(path_parts):
+                    # Check for [X] pattern
+                    match = re.search(r'^\[(\d+(\.\d+)?)\]', part)
+                    if match:
+                        primary_sequence = f" #{match.group(1)}"
+                        logger.info(
+                            f"Found Primary Sequence in Folder: {part} -> {primary_sequence}")
+                        break
+            except:
+                pass
+
+        # 2. Add Readarr Series (With sequence if found!)
+        if readarr_series_name:
+            found_series.add(f"{readarr_series_name}{primary_sequence}")
+
+        # 3. Fallback: If Readarr Series is empty, look at Folder Name parent
+        if not readarr_series_name and file_path and r_author:
+            try:
+                path_parts = os.path.normpath(file_path).split(os.sep)
+                author_idx = -1
+                for i, part in enumerate(path_parts):
+                    if not part:
+                        continue
+                    if part.lower() in ['mnt', 'media', 'audiobooks', 'books']:
+                        continue
+                    if r_author.lower() in part.lower():
+                        author_idx = i
+                        break
+
+                # If we have Author/Series/Book/...
+                if author_idx != -1 and author_idx + 1 < len(path_parts):
+                    potential_series = path_parts[author_idx + 1]
+                    # Check if this folder looks like a series (not the book title)
+                    sim = SequenceMatcher(
+                        None, potential_series.lower(), str(r_title).lower()).ratio()
+                    if sim < 0.6:
+                        # It is a series folder!
+                        found_series.add(
+                            f"{potential_series}{primary_sequence}")
+            except:
+                pass
+
+        # 4. Google Books & Open Library (Universe/Secondary)
+        # Google Books
         if gb_results:
             vol = gb_results[0].get('volumeInfo', {})
             meta_data['description'] = vol.get('description', '')
             meta_data['publisher'] = vol.get('publisher', '')
             meta_data['genres'] = vol.get('categories', [])
             meta_data['language'] = vol.get('language', '')
+            meta_data['pageCount'] = vol.get('pageCount')
 
             for ident in vol.get('industryIdentifiers', []):
                 if ident.get('type') == 'ISBN_13':
@@ -357,89 +415,56 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
                 if ident.get('type') == 'ISBN_10':
                     meta_data['asin'] = ident.get('identifier')
 
+            # Subtitle Analysis for additional series
             subtitle = vol.get('subtitle', '')
             if subtitle:
                 meta_data['subtitle'] = subtitle
-                # Extract series from subtitle
-                if " of " in subtitle:
-                    parts = subtitle.split(" of ")
-                    if len(parts) > 1:
-                        found_series.add(
-                            f"{parts[1].strip()}{self.extract_sequence_number(parts[0])}")
 
-                clean_name = re.sub(
+                # Logic: If subtitle is "Book 1 of Cosmere", and we haven't seen Cosmere...
+                clean_subtitle_series = re.sub(
                     r'[,:]?\s*(?:Book|Vol\.?|Volume|#)\s*\d+', '', subtitle, flags=re.IGNORECASE).strip()
-                seq_num = self.extract_sequence_number(subtitle)
-                if clean_name and len(clean_name) > 2:
-                    found_series.add(f"{clean_name}{seq_num}")
+                subtitle_seq = self.extract_sequence_number(subtitle)
 
-        # 3. Open Library
+                if clean_subtitle_series and len(clean_subtitle_series) > 2:
+                    # Avoid duplicates of the primary series if names are close
+                    is_duplicate = False
+                    for s in list(found_series):
+                        if clean_subtitle_series.lower() in s.lower():
+                            is_duplicate = True
+                            break
+
+                    if not is_duplicate:
+                        found_series.add(
+                            f"{clean_subtitle_series}{subtitle_seq}")
+
+        # Open Library
         if ol_results:
             doc = ol_results[0]
             if 'series' in doc:
                 for s in doc['series']:
+                    # Add without sequence unless we can smartly deduce it
+                    # (Open Library rarely gives sequence in simple search)
                     found_series.add(s)
 
-        # 4. Folder Logic (FIXED "mnt" BUG)
-        if file_path and r_author:
-            try:
-                path_parts = os.path.normpath(file_path).split(os.sep)
-                author_idx = -1
-                for i, part in enumerate(path_parts):
-                    if not part:
-                        continue  # SKIP EMPTY PARTS (Root / match)
-                    if part.lower() in ['mnt', 'media', 'audiobooks', 'books']:
-                        continue
+            if 'author_name' in doc and isinstance(doc['author_name'], list):
+                for a in doc['author_name']:
+                    if a not in meta_data['authors']:
+                        meta_data['authors'].append(a)
 
-                    if r_author.lower() in part.lower() or part.lower() in r_author.lower():
-                        author_idx = i
-                        break
+        # 5. Narrator Detection
+        desc = meta_data.get('description', '')
+        narrator_match = re.search(
+            r'Narrated by[:\s]+([A-Z][a-z]+ [A-Z][a-z]+)', desc)
+        if narrator_match:
+            meta_data['narrators'] = [narrator_match.group(1)]
 
-                if author_idx != -1 and author_idx + 1 < len(path_parts):
-                    potential_series = path_parts[author_idx + 1]
-                    potential_book = path_parts[author_idx +
-                                                2] if author_idx + 2 < len(path_parts) else ""
-
-                    # Logic: If folder name != Book Title, it is a series
-                    sim = SequenceMatcher(
-                        None, potential_series.lower(), str(r_title).lower()).ratio()
-                    if sim < 0.6:
-                        # Try to find [2] in the BOOK folder, not the series folder
-                        seq_str = self.extract_sequence_number(potential_book)
-                        if not seq_str:  # Fallback to checking filename
-                            seq_str = self.extract_sequence_number(
-                                os.path.basename(file_path))
-
-                        found_series.add(f"{potential_series}{seq_str}")
-                        logger.debug(
-                            f"Folder Logic Series: {potential_series}{seq_str}")
-            except Exception as e:
-                logger.error(f"Path parsing error: {e}")
-
-        # Format Series Tags
-        final_series_list = []
-        seen_base_names = {}
-
-        for tag in found_series:
-            match = re.match(r'^(.*?)\s*(#\d+(\.\d+)?)?$', tag)
-            if match:
-                name = match.group(1).strip()
-                seq = match.group(2) or ""
-                key = name.lower()
-                if key not in seen_base_names:
-                    seen_base_names[key] = (name, seq)
-                elif seq:
-                    seen_base_names[key] = (name, seq)
-
-        for name, seq in seen_base_names.values():
-            final_series_list.append(f"{name}{seq}")
-
-        meta_data['series'] = final_series_list
-        logger.info(f"Final Series List: {final_series_list}")
+        # --- Final Merge & Clean ---
+        meta_data['series'] = list(found_series)
+        logger.info(f"Final Series List to Write: {meta_data['series']}")
 
         # Update JSON
         success = self.update_abs_metadata(file_path, meta_data)
-        msg = f"Updated metadata.json for **{r_title}**." if success else "Failed to update."
+        msg = f"Updated metadata.json for **{r_title}**." if success else "Failed to update metadata.json."
 
         if interaction:
             await interaction.followup.send(f"✅ {msg}")
@@ -463,10 +488,11 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
                 except:
                     pass
 
+            # Force Series Update (Since our logic is better now)
             current_data['series'] = new_data.get('series', [])
 
             fields = ['title', 'subtitle', 'authors', 'narrators', 'description',
-                      'publisher', 'publishedYear', 'genres', 'isbn', 'asin', 'language']
+                      'publisher', 'publishedYear', 'genres', 'isbn', 'asin', 'language', 'pageCount']
 
             for field in fields:
                 val = new_data.get(field)
