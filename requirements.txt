@@ -7,3 +7,5 @@ dotenv
 Flask[async]
 docker
 plexapi
+mutagen
+aiohttp
