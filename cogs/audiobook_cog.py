@@ -4,6 +4,7 @@ import logging
 import aiohttp
 import os
 import asyncio
+import json  # <--- Added for payload dumping
 from mutagen.id3 import ID3, TIT1, ID3NoHeaderError
 from mutagen.mp4 import MP4
 from typing import List, Dict, Optional
@@ -16,12 +17,10 @@ logger = logging.getLogger(__name__)
 class BookSelect(discord.ui.Select):
     def __init__(self, books: List[Dict]):
         options = []
-        # Limit to top 5 results to avoid hitting Discord limits
         for i, book in enumerate(books[:5]):
             vol = book.get('volumeInfo', {})
             title = vol.get('title', 'Unknown')[:90]
             authors = ", ".join(vol.get('authors', []))[:50]
-            # Store the index as the value so we can retrieve the full object later
             options.append(discord.SelectOption(
                 label=title,
                 description=f"by {authors}",
@@ -35,12 +34,8 @@ class BookSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         selected_index = int(self.values[0])
         selected_book = self.books[selected_index]
-
-        # Disable the view so they can't click again
         self.view.stop()
         await interaction.response.defer()
-
-        # Call the processing function on the Cog logic
         await self.view.cog.finalize_tagging(
             interaction,
             selected_book,
@@ -68,22 +63,28 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
     # --- Commands ---
 
     @commands.hybrid_command(name="absscan", description="Force a scan of the Audiobookshelf library.")
-    @commands.is_owner()  # Or @commands.has_permissions(administrator=True)
+    @commands.is_owner()
     async def absscan_command(self, ctx: commands.Context):
-        """Manually triggers a library scan."""
         await ctx.defer()
-
-        success = await self.trigger_abs_scan()
-
-        if success:
+        if await self.trigger_abs_scan():
             await ctx.send("✅ **Audiobookshelf Scan Initiated.**")
         else:
-            await ctx.send("❌ **Scan Failed.** Check bot logs and environment variables.")
+            await ctx.send("❌ **Scan Failed.** Check bot logs.")
 
     # --- Core Logic ---
 
     async def process_readarr_event(self, payload: Dict):
         """Main entry point from the webhook."""
+
+        # --- DEBUG DUMP ---
+        # This will print the exact JSON Readarr sent to your logs
+        try:
+            logger.info(
+                f"📥 READARR PAYLOAD DUMP:\n{json.dumps(payload, indent=4)}")
+        except Exception as e:
+            logger.error(f"Failed to dump payload: {e}")
+        # ------------------
+
         event_type = payload.get('eventType')
 
         if event_type == 'Test':
@@ -104,30 +105,25 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
         # 2. Robust Path Extraction
         file_path = None
 
-        # Priority 1: Standard 'bookFile' (Import/Upgrade)
+        # Check standard 'bookFile' (Singular)
         if 'bookFile' in payload:
             file_path = payload['bookFile'].get('path')
 
-        # Priority 2: 'renamedBookFiles' (Mass Editor / Rename)
+        # Check 'bookFiles' (Plural - often in Download/Upgrade)
+        elif 'bookFiles' in payload and len(payload['bookFiles']) > 0:
+            file_path = payload['bookFiles'][0].get('path')
+
+        # Check 'renamedBookFiles' (Mass Editor / Rename)
         elif 'renamedBookFiles' in payload and len(payload['renamedBookFiles']) > 0:
             file_path = payload['renamedBookFiles'][0].get('path')
 
-        # Priority 3: 'sourcePath' (Fallback)
+        # Check 'sourcePath' (Fallback)
         elif 'sourcePath' in payload:
             file_path = payload['sourcePath']
 
-        # Debugging Block: If path is missing, log detailed info
         if not file_path:
             logger.error(
-                f"❌ Could not find file path for '{title}'. Event: {event_type}")
-            logger.error(f"Available Keys in Payload: {list(payload.keys())}")
-
-            if 'bookFile' in payload:
-                logger.error(f"Content of 'bookFile': {payload['bookFile']}")
-            elif 'renamedBookFiles' in payload:
-                logger.error(
-                    f"Content of 'renamedBookFiles': {payload['renamedBookFiles']}")
-
+                f"❌ Could not find file path for '{title}'. Check the PAYLOAD DUMP above.")
             return
 
         if not os.path.exists(file_path):
@@ -156,18 +152,15 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
             await self.finalize_tagging(None, results[0], file_path, payload)
 
         elif event_type == 'Rename':
-            # SILENT MODE: If this was a Mass Rename, DO NOT spam Discord with questions.
             logger.info(
                 f"Low confidence ({match_confidence}) during Rename. Skipping to avoid spam.")
 
         else:
-            # Only ask for manual approval on new Downloads/Upgrades
             logger.info(
                 f"Low confidence ({match_confidence}). Requesting user approval.")
             await self.request_manual_approval(results, title, author, file_path, payload)
 
     async def search_google_books(self, title: str, author: str) -> List[Dict]:
-        """Queries Google Books API."""
         query = f"intitle:{title}+inauthor:{author}"
         url = f"https://www.googleapis.com/books/v1/volumes?q={query}&maxResults=5"
         if self.google_api_key:
@@ -187,7 +180,6 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
             return []
 
     def calculate_confidence(self, r_title, r_author, g_result) -> float:
-        """Crude string matching confidence."""
         g_title = g_result.get('title', '').lower()
         r_title = r_title.lower() if r_title else ""
 
@@ -195,11 +187,9 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
             return 1.0
         if r_title in g_title:
             return 0.95
-
         return 0.5
 
     async def request_manual_approval(self, results, title, author, file_path, payload):
-        """Sends an embed to Discord for the user to pick."""
         channel_id = os.getenv("READARR_CHANNEL_ID")
 
         if not channel_id:
@@ -225,22 +215,19 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
             logger.error(f"Invalid READARR_CHANNEL_ID: {channel_id}")
 
     async def finalize_tagging(self, interaction, google_book_data, file_path, readarr_payload):
-        """Applies tags and notifies ABS."""
         vol_info = google_book_data.get('volumeInfo', {})
 
         # --- SERIES LOGIC ---
         series_tags = []
 
-        # 1. Get Primary Series from Readarr
         readarr_series = readarr_payload.get('series', {}).get('title')
         if readarr_series:
             series_tags.append(readarr_series)
 
-        # 2. Check Description/Categories for "Universe" keywords
         description = vol_info.get('description', '').lower()
         categories = str(vol_info.get('categories', [])).lower()
 
-        # Example Universe Logic (Expand this with a dictionary/json map later!)
+        # Example Universe Logic
         if "cosmere" in description or "cosmere" in categories:
             series_tags.append("The Cosmere")
         if "middle-earth" in description or "tolkien" in categories:
@@ -248,7 +235,6 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
         if "grishaverse" in description:
             series_tags.append("Grishaverse")
 
-        # Format for ABS: "Series A; Series B"
         tag_string = "; ".join(series_tags)
 
         msg = ""
@@ -259,7 +245,6 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
             self.apply_tags(file_path, tag_string)
             msg = f"Tagged with: `{tag_string}`"
 
-        # --- NOTIFICATION ---
         if interaction:
             await interaction.followup.send(f"✅ **Processed!** {msg}")
             try:
@@ -267,11 +252,9 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
             except:
                 pass
 
-        # --- ABS SCAN ---
         await self.trigger_abs_scan()
 
     def apply_tags(self, filepath, tag_string):
-        """Writes the CONTENTGROUP (grouping) tag using mutagen."""
         try:
             ext = os.path.splitext(filepath)[1].lower()
             if ext == ".mp3":
@@ -290,7 +273,6 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
             logger.error(f"Tagging failed for {filepath}: {e}")
 
     async def trigger_abs_scan(self) -> bool:
-        """Hits the Audiobookshelf API to scan the library."""
         abs_url = os.getenv("ABS_URL")
         abs_token = os.getenv("ABS_TOKEN")
         library_id = os.getenv("ABS_LIBRARY_ID")
