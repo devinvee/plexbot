@@ -194,6 +194,36 @@ async def _process_and_send_buffered_notifications(series_id: str, bot_instance:
 
 # --- Webhook Endpoints ---
 
+# In media_watcher_service.py
+
+
+@app.route('/webhook/readarr', methods=['POST'])
+async def readarr_webhook():
+    """Handles Readarr 'On Download' / 'On Upgrade' events."""
+    logger.info("Received Readarr webhook request")
+    try:
+        payload = request.json
+        event_type = payload.get('eventType')
+
+        if event_type not in ['Download', 'Upgrade', 'Test']:
+            return jsonify({"status": "ignored", "reason": "Unsupported event type"}), 200
+
+        bot_instance = app.config.get('discord_bot')
+        if not bot_instance:
+            return jsonify({"status": "error", "message": "Bot instance missing"}), 500
+
+        # Dispatch the event to the new AudiobookCog
+        # We run this as a task so we don't block the webhook response
+        bot_instance.loop.create_task(
+            bot_instance.get_cog("Audiobook").process_readarr_event(payload)
+        )
+
+        return jsonify({"status": "success", "message": "Event queued for processing"}), 200
+
+    except Exception as e:
+        logger.error(f"Error processing Readarr webhook: {e}", exc_info=True)
+        return jsonify({"status": "error", "message": "Internal server error"}), 500
+
 
 @app.route('/webhook/radarr', methods=['POST'])
 async def radarr_webhook_detailed():
