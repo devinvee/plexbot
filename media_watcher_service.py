@@ -205,7 +205,8 @@ async def readarr_webhook():
         payload = request.json
         event_type = payload.get('eventType')
 
-        if event_type not in ['Download', 'Upgrade', 'Rename', 'Test']:  # Added 'Rename'
+        # Updated to include 'Rename' for mass updates
+        if event_type not in ['Download', 'Upgrade', 'Rename', 'Test']:
             return jsonify({"status": "ignored", "reason": "Unsupported event type"}), 200
 
         bot_instance = app.config.get('discord_bot')
