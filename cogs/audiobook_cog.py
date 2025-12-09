@@ -68,7 +68,7 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
     # --- Commands ---
 
     @commands.hybrid_command(name="absscan", description="Force a scan of the Audiobookshelf library.")
-    @commands.is_owner()  # Or @commands.has_permissions(administrator=True) if you prefer
+    @commands.is_owner()  # Or @commands.has_permissions(administrator=True)
     async def absscan_command(self, ctx: commands.Context):
         """Manually triggers a library scan."""
         await ctx.defer()
@@ -84,45 +84,64 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
 
     async def process_readarr_event(self, payload: Dict):
         """Main entry point from the webhook."""
-        if payload.get('eventType') == 'Test':
+        event_type = payload.get('eventType')
+
+        if event_type == 'Test':
             logger.info("Readarr Test Event Received.")
+            return
+
+        # Support 'Rename' to allow mass-updates from Readarr
+        if event_type not in ['Download', 'Upgrade', 'Rename']:
             return
 
         # 1. Extract Data
         book_info = payload.get('book', {})
-        file_info = payload.get('bookFile', {})
+        title = book_info.get('title', 'Unknown Title')
 
-        title = book_info.get('title')
-        # Readarr sometimes puts author at top level, sometimes inside book
+        # Author extraction (Readarr varies where this is placed)
         author = payload.get('author', {}).get('name')
         if not author:
             author = book_info.get('authorTitle')
 
-        file_path = file_info.get('path')
+        # 2. Robust Path Extraction
+        file_path = None
 
-        # Ensure path exists (Docker volume mapping check)
+        # Check standard "Import/Download" location
+        if 'bookFile' in payload:
+            file_path = payload['bookFile'].get('path')
+
+        # Check "Rename" location (Readarr sends a list of files)
+        elif 'renamedBookFiles' in payload and len(payload['renamedBookFiles']) > 0:
+            # Use the first file in the list
+            file_path = payload['renamedBookFiles'][0].get('path')
+
+        # Check generic "sourcePath" (common fallback)
+        elif 'sourcePath' in payload:
+            file_path = payload['sourcePath']
+
+        # Debugging: Log if path is missing to help troubleshooting
         if not file_path:
-            logger.error("No file path provided in Readarr payload.")
+            logger.error(
+                f"❌ Could not find file path for '{title}'. Event: {event_type}")
             return
 
         if not os.path.exists(file_path):
-            logger.error(
-                f"File not found at {file_path}. Check Docker volume mappings.")
+            logger.warning(
+                f"⚠️ File path not found on server: {file_path}. Check Docker volumes.")
             return
 
-        logger.info(f"Processing Audiobook: {title} by {author}")
+        logger.info(
+            f"Processing Audiobook ({event_type}): {title} by {author}")
 
-        # 2. Search Google Books
+        # 3. Search Google Books
         results = await self.search_google_books(title, author)
 
         if not results:
             logger.warning(
-                f"No Google Books results found for {title}. Skipping tagging.")
-            # Optional: You could notify Discord here that no match was found.
+                f"No Google Books results found for {title}. Skipping.")
             return
 
-        # 3. Confidence Check
-        # Simple heuristic: If the first result title is a very close match, auto-approve.
+        # 4. Confidence Check & Tagging
         top_result = results[0]['volumeInfo']
         match_confidence = self.calculate_confidence(title, author, top_result)
 
@@ -130,7 +149,14 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
             logger.info(
                 f"High confidence match ({match_confidence}). Tagging automatically.")
             await self.finalize_tagging(None, results[0], file_path, payload)
+
+        elif event_type == 'Rename':
+            # SILENT MODE: If this was a Mass Rename, DO NOT spam Discord with questions.
+            logger.info(
+                f"Low confidence ({match_confidence}) during Rename. Skipping to avoid spam.")
+
         else:
+            # Only ask for manual approval on new Downloads/Upgrades
             logger.info(
                 f"Low confidence ({match_confidence}). Requesting user approval.")
             await self.request_manual_approval(results, title, author, file_path, payload)
@@ -160,10 +186,8 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
         g_title = g_result.get('title', '').lower()
         r_title = r_title.lower() if r_title else ""
 
-        # Exact title match
         if r_title == g_title:
             return 1.0
-        # Substring match (e.g. "Mistborn" in "Mistborn: The Final Empire")
         if r_title in g_title:
             return 0.95
 
@@ -171,7 +195,6 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
 
     async def request_manual_approval(self, results, title, author, file_path, payload):
         """Sends an embed to Discord for the user to pick."""
-        # CHANGED: Look for READARR_CHANNEL_ID in env, fallback to log warning
         channel_id = os.getenv("READARR_CHANNEL_ID")
 
         if not channel_id:
@@ -203,7 +226,7 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
         # --- SERIES LOGIC ---
         series_tags = []
 
-        # 1. Get Primary Series from Readarr (Usually reliable for the main series)
+        # 1. Get Primary Series from Readarr
         readarr_series = readarr_payload.get('series', {}).get('title')
         if readarr_series:
             series_tags.append(readarr_series)
@@ -212,7 +235,7 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
         description = vol_info.get('description', '').lower()
         categories = str(vol_info.get('categories', [])).lower()
 
-        # Example Universe Logic (Expand this with a dictionary/json map later!)
+        # Example Universe Logic (Expand this logic here!)
         if "cosmere" in description or "cosmere" in categories:
             series_tags.append("The Cosmere")
         if "middle-earth" in description or "tolkien" in categories:
@@ -234,7 +257,6 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
         # --- NOTIFICATION ---
         if interaction:
             await interaction.followup.send(f"✅ **Processed!** {msg}")
-            # Try to delete the selection message to clean up chat
             try:
                 await interaction.message.delete()
             except:
@@ -252,12 +274,10 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
                     audio = ID3(filepath)
                 except ID3NoHeaderError:
                     audio = ID3()
-                # TIT1 is the ID3v2 frame for "Content Group Description" (Grouping)
                 audio.add(TIT1(encoding=3, text=tag_string))
                 audio.save(filepath)
             elif ext in [".m4b", ".m4a"]:
                 audio = MP4(filepath)
-                # \xa9grp is the atom for "Grouping"
                 audio.tags['\xa9grp'] = tag_string
                 audio.save()
             logger.info(f"Successfully wrote tags to {filepath}")
@@ -271,11 +291,9 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
         library_id = os.getenv("ABS_LIBRARY_ID")
 
         if not all([abs_url, abs_token, library_id]):
-            logger.warning(
-                "ABS config missing (ABS_URL, ABS_TOKEN, or ABS_LIBRARY_ID). Cannot trigger scan.")
+            logger.warning("ABS config missing. Cannot trigger scan.")
             return False
 
-        # Normalize URL
         abs_url = abs_url.rstrip('/')
         url = f"{abs_url}/api/libraries/{library_id}/scan"
         headers = {"Authorization": f"Bearer {abs_token}"}
