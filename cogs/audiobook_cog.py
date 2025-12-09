@@ -18,8 +18,11 @@ class BookSelect(discord.ui.Select):
     def __init__(self, books: List[Dict]):
         options = []
         for i, book in enumerate(books[:5]):
+            # Handle both Google Books and Open Library formats
             title = book.get('title') or book.get(
                 'volumeInfo', {}).get('title', 'Unknown')
+
+            # Extract authors safely
             authors_list = book.get('author_name') or book.get(
                 'volumeInfo', {}).get('authors', [])
             if isinstance(authors_list, list):
@@ -33,19 +36,26 @@ class BookSelect(discord.ui.Select):
                 value=str(i)
             ))
 
-        super().__init__(placeholder="Select the correct book match...",
-                         min_values=1, max_values=1)
+        # FIX: Explicitly pass the options list to the parent class
+        super().__init__(
+            placeholder="Select the correct book match...",
+            min_values=1,
+            max_values=1,
+            options=options
+        )
         self.books = books
 
     async def callback(self, interaction: discord.Interaction):
         selected_index = int(self.values[0])
         selected_book = self.books[selected_index]
+        # Stop the view interactions
         self.view.stop()
 
         logger.info(
             f"User {interaction.user} selected book index {selected_index}: {selected_book.get('title', 'Unknown')}")
         await interaction.response.defer()
 
+        # Pass the selected book as both GB/OL result to force processing
         await self.view.cog.finalize_tagging(
             interaction,
             [selected_book],
@@ -61,7 +71,10 @@ class ManualMatchView(discord.ui.View):
         self.file_path = file_path
         self.readarr_metadata = readarr_metadata
         self.cog = cog
-        self.add_item(BookSelect(books))
+
+        # Only add the select menu if we actually have books to show
+        if books:
+            self.add_item(BookSelect(books))
 
 # --- Main Cog ---
 
@@ -92,9 +105,8 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
     async def process_readarr_event(self, payload: Dict):
         """Main entry point from the webhook."""
 
-        # DEBUG: Dump payload to trace exact data
+        # Debug Dump
         try:
-            # Only dumping if log level is debug to avoid clutter
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(
                     f"📥 READARR PAYLOAD DUMP:\n{json.dumps(payload, indent=4)}")
@@ -126,26 +138,21 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
         file_path = None
         if 'bookFile' in payload:
             file_path = payload['bookFile'].get('path')
-            logger.debug("Found path in 'bookFile'")
         elif 'bookFiles' in payload and len(payload['bookFiles']) > 0:
             file_path = payload['bookFiles'][0].get('path')
-            logger.debug("Found path in 'bookFiles' list")
         elif 'renamedBookFiles' in payload and len(payload['renamedBookFiles']) > 0:
             file_path = payload['renamedBookFiles'][0].get('path')
-            logger.debug("Found path in 'renamedBookFiles' (Mass Editor)")
         elif 'sourcePath' in payload:
             file_path = payload['sourcePath']
-            logger.debug("Found path in 'sourcePath'")
 
         if not file_path:
             logger.error(
                 f"❌ Could not find file path for '{title}'. Event: {event_type}")
-            logger.debug(f"Available Payload Keys: {list(payload.keys())}")
             return
 
         if not os.path.exists(file_path):
             logger.error(
-                f"⚠️ File path not found on server: {file_path}. Check Docker volume mappings in docker-compose.yml.")
+                f"⚠️ File path not found on server: {file_path}. Check Docker volumes.")
             return
 
         logger.info(
@@ -188,11 +195,12 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
 
         elif event_type == 'Rename':
             logger.info(
-                f"Low confidence ({match_confidence}) during Rename event. Skipping to avoid spam.")
+                f"Low confidence ({match_confidence}) during Rename. Skipping to avoid spam.")
 
         else:
             logger.info(
                 f"Low confidence ({match_confidence}). Requesting user approval via Discord.")
+            # Present Google Books results if available, else OL
             await self.request_manual_approval(results_gb or results_ol, title, author, file_path, payload)
 
     async def search_google_books(self, title: str, author: str) -> List[Dict]:
@@ -209,8 +217,6 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
                     if resp.status == 200:
                         data = await resp.json()
                         return data.get('items', [])
-                    logger.warning(
-                        f"Google Books API returned status {resp.status}")
                     return []
         except Exception as e:
             logger.error(f"Error searching Google Books: {e}")
@@ -228,8 +234,6 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
                     if resp.status == 200:
                         data = await resp.json()
                         return data.get('docs', [])
-                    logger.warning(
-                        f"Open Library API returned status {resp.status}")
                     return []
         except Exception as e:
             logger.error(f"Error searching Open Library: {e}")
@@ -240,25 +244,28 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
             return 0.0
         r_title = r_title.lower()
         match_title = match_title.lower()
+
         if r_title == match_title:
             return 1.0
-        if r_title in match_title:
+
+        # Check substrings both ways (Fixes "Mistborn" vs "Mistborn: Final Empire")
+        if r_title in match_title or match_title in r_title:
             return 0.95
+
         matcher = SequenceMatcher(None, r_title, match_title)
         return matcher.ratio()
 
     async def request_manual_approval(self, results, title, author, file_path, payload):
         channel_id = os.getenv("READARR_CHANNEL_ID")
         if not channel_id:
-            logger.critical(
-                "READARR_CHANNEL_ID is not set in environment variables.")
+            logger.error(
+                "READARR_CHANNEL_ID not set. Cannot send approval request.")
             return
 
         try:
             channel = self.bot.get_channel(int(channel_id))
             if not channel:
-                logger.error(
-                    f"Could not find Discord channel with ID {channel_id}")
+                logger.error(f"Could not find channel with ID {channel_id}")
                 return
 
             embed = discord.Embed(
@@ -268,14 +275,14 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
             )
             view = ManualMatchView(results, file_path, payload, self)
             await channel.send(embed=embed, view=view)
-            logger.info(
-                f"Sent manual approval request to channel {channel_id}")
+            logger.info(f"Sent approval request to channel {channel_id}")
         except Exception as e:
             logger.error(f"Failed to send Discord message: {e}")
 
     def extract_sequence_number(self, text: str) -> str:
         if not text:
             return ""
+        # Matches: Book 5, Vol 5, #5, (5), [5]
         match = re.search(
             r'(?:Book|Vol\.?|Volume|#|\[|\()\s*(\d+(\.\d+)?)', text, re.IGNORECASE)
         if match:
@@ -285,8 +292,6 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
     async def finalize_tagging(self, interaction, gb_results, ol_results, file_path, readarr_payload):
         logger.info(f"Finalizing metadata for file: {file_path}")
         found_series: Set[str] = set()
-
-        # Metadata dictionary setup
         meta_data = {}
 
         # 1. Readarr Info
@@ -298,8 +303,6 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
         meta_data['title'] = r_title
         meta_data['authors'] = [r_author] if r_author else []
         meta_data['publishedYear'] = str(r_book.get('releaseDate', ''))[:4]
-
-        logger.debug(f"Base Metadata from Readarr: {meta_data}")
 
         # 2. Google Books Extraction
         if gb_results:
@@ -330,16 +333,12 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
                 if clean_name and len(clean_name) > 2:
                     found_series.add(f"{clean_name}{seq_num}")
 
-            logger.debug(f"Google Books Series extracted: {found_series}")
-
         # 3. Open Library Extraction
         if ol_results:
             doc = ol_results[0]
             if 'series' in doc:
                 for s in doc['series']:
                     found_series.add(s)
-            logger.debug(
-                f"Open Library Series extracted: {doc.get('series', [])}")
 
         # 4. Readarr Series
         readarr_series = readarr_payload.get('series', {}).get('title')
@@ -367,9 +366,9 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
                             path_parts[author_idx + 2] if author_idx + 2 < len(path_parts) else "")
                         found_series.add(f"{potential_series}{seq_str}")
                         logger.debug(
-                            f"Folder Logic Series extracted: {potential_series}{seq_str}")
+                            f"Folder Logic Series: {potential_series}{seq_str}")
             except Exception as e:
-                logger.error(f"Path parsing failed during folder logic: {e}")
+                logger.error(f"Path parsing failed: {e}")
 
         # Format Series Tags
         final_tags = {}
@@ -404,8 +403,6 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
         """Creates or updates the metadata.json file for Audiobookshelf."""
         try:
             book_dir = os.path.dirname(file_path)
-            logger.debug(f"Target Directory: {book_dir}")
-
             if not os.path.exists(book_dir):
                 logger.error(f"Book directory does not exist: {book_dir}")
                 return False
@@ -413,15 +410,12 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
             meta_path = os.path.join(book_dir, "metadata.json")
             current_data = {}
 
-            # Read existing
             if os.path.exists(meta_path):
                 try:
                     with open(meta_path, 'r', encoding='utf-8') as f:
                         current_data = json.load(f)
-                    logger.debug("Existing metadata.json read successfully.")
                 except Exception as e:
-                    logger.warning(
-                        f"Could not read existing metadata.json: {e}")
+                    logger.warning(f"Could not read existing metadata: {e}")
 
             # Merge Data
             current_data['series'] = new_data.get('series', [])
@@ -446,19 +440,15 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
             if 'chapters' not in current_data:
                 current_data['chapters'] = []
 
-            # Write File
             with open(meta_path, 'w', encoding='utf-8') as f:
                 json.dump(current_data, f, indent=2, ensure_ascii=False)
 
-            # Permissions
             try:
                 st = os.stat(book_dir)
                 os.chown(meta_path, st.st_uid, st.st_gid)
                 os.chmod(meta_path, 0o664)
-                logger.debug(
-                    f"Set permissions on metadata.json to 664 (Owner: {st.st_uid})")
-            except Exception as e:
-                logger.debug(f"Permission setting skipped (non-root?): {e}")
+            except Exception:
+                pass
 
             logger.info(f"✅ Successfully wrote metadata.json to {meta_path}")
             return True
@@ -473,30 +463,24 @@ class AudiobookCog(commands.Cog, name="Audiobook"):
         library_id = os.getenv("ABS_LIBRARY_ID")
 
         if not all([abs_url, abs_token, library_id]):
-            logger.critical(
-                "ABS configuration missing (URL, Token, or Library ID).")
+            logger.error("ABS config missing. Cannot trigger scan.")
             return False
 
         abs_url = abs_url.rstrip('/')
         url = f"{abs_url}/api/libraries/{library_id}/scan"
         headers = {"Authorization": f"Bearer {abs_token}"}
 
-        logger.debug(f"Triggering ABS scan at: {url}")
-
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, headers=headers) as resp:
                     if resp.status == 200:
-                        logger.info(
-                            "Triggered Audiobookshelf Library Scan successfully.")
+                        logger.info("Triggered Audiobookshelf Library Scan.")
                         return True
                     else:
-                        text = await resp.text()
-                        logger.error(
-                            f"Failed to scan ABS: {resp.status} - {text}")
+                        logger.error(f"Failed to scan ABS: {resp.status} - {await resp.text()}")
                         return False
         except Exception as e:
-            logger.error(f"ABS Scan connection error: {e}")
+            logger.error(f"ABS Scan error: {e}")
             return False
 
 
