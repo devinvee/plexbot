@@ -34,12 +34,6 @@ class TMDBConfig:
     api_key: str = ""
 
 @dataclass
-class PlexConfig:
-    enabled: bool = True
-    scan_on_notification: bool = True
-    library_name: Optional[str] = None  # If None, scans all libraries
-
-@dataclass
 class UserMappings:
     plex_to_discord: Dict[str, str] = field(default_factory=dict)
 
@@ -51,7 +45,6 @@ class BotConfig:
     sonarr_instances: List[SonarrInstanceConfig] = field(default_factory=list)
     user_mappings: UserMappings = field(default_factory=UserMappings)
     tmdb: TMDBConfig = field(default_factory=TMDBConfig)
-    plex: PlexConfig = field(default_factory=PlexConfig)
 
 bot_config = BotConfig()
 
@@ -69,4 +62,3 @@ def update_config(new_config: Dict[str, Any]):
     bot_config.sonarr_instances = [SonarrInstanceConfig(**instance) for instance in new_config.get("sonarr_instances", [])]
     bot_config.user_mappings = UserMappings(**new_config.get("user_mappings", {}))
     bot_config.tmdb = TMDBConfig(**new_config.get("tmdb", {}))
-    bot_config.plex = PlexConfig(**new_config.get("plex", {}))
