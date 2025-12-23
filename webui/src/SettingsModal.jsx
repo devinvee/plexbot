@@ -120,6 +120,7 @@ export default function SettingsModal({ isOpen, onClose, status }) {
 		{ id: 'plex', label: 'Plex' },
 		{ id: 'discord', label: 'Discord' },
 		{ id: 'sonarr', label: 'Sonarr' },
+		{ id: 'radarr', label: 'Radarr' },
 		{ id: 'overseerr', label: 'Overseerr' },
 		{ id: 'tmdb', label: 'TMDB' },
 		{ id: 'users', label: 'User Mappings' },
@@ -357,6 +358,181 @@ export default function SettingsModal({ isOpen, onClose, status }) {
 											}
 										>
 											+ Add Sonarr Instance
+										</button>
+									</div>
+								)}
+
+								{activeTab === 'radarr' && (
+									<div className="settings-section">
+										<h3>Radarr Instances</h3>
+										<p className="setting-description" style={{ marginBottom: '1.5rem' }}>
+											Configure Radarr instances for webhook notifications. Radarr instances are used to receive download notifications.
+										</p>
+										{config.radarr_instances?.map((instance, index) => (
+											<div key={index} className="array-item">
+												<div className="array-item-header">
+													<h4>Instance {index + 1}</h4>
+													<button
+														className="btn btn-danger btn-small"
+														onClick={() => removeArrayItem('radarr_instances', index)}
+													>
+														Remove
+													</button>
+												</div>
+												<SettingItem label="Name">
+													<input
+														type="text"
+														value={instance.name || ''}
+														onChange={(e) =>
+															updateArrayItem('radarr_instances', index, {
+																name: e.target.value,
+															})
+														}
+														placeholder="Radarr"
+													/>
+												</SettingItem>
+												<SettingItem label="URL">
+													<input
+														type="text"
+														value={instance.url || ''}
+														onChange={(e) =>
+															updateArrayItem('radarr_instances', index, {
+																url: e.target.value,
+															})
+														}
+														placeholder="http://radarr:7878"
+													/>
+												</SettingItem>
+												<SettingItem label="API Key">
+													<input
+														type="password"
+														value={instance.api_key || ''}
+														onChange={(e) =>
+															updateArrayItem('radarr_instances', index, {
+																api_key: e.target.value,
+															})
+														}
+														placeholder="API Key"
+													/>
+												</SettingItem>
+												<SettingItem label="Enabled">
+													<Toggle
+														checked={instance.enabled ?? false}
+														onChange={(e) =>
+															updateArrayItem('radarr_instances', index, {
+																enabled: e.target.checked,
+															})
+														}
+													/>
+												</SettingItem>
+											</div>
+										))}
+										{(!config.radarr_instances || config.radarr_instances.length === 0) && (
+											<div className="empty-state" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+												No Radarr instances configured. Radarr notifications work via webhooks and don't require instance configuration.
+											</div>
+										)}
+										<button
+											className="btn btn-secondary"
+											onClick={() =>
+												addArrayItem('radarr_instances', {
+													name: '',
+													url: '',
+													api_key: '',
+													enabled: false,
+												})
+											}
+										>
+											+ Add Radarr Instance
+										</button>
+									</div>
+								)}
+
+								{activeTab === 'radarr' && (
+									<div className="settings-section">
+										<h3>Radarr Configuration</h3>
+										<p className="setting-description" style={{ marginBottom: '1.5rem' }}>
+											Radarr notifications are received via webhooks. You can optionally configure Radarr instances here for future API integration.
+										</p>
+										{config.radarr_instances?.map((instance, index) => (
+											<div key={index} className="array-item">
+												<div className="array-item-header">
+													<h4>Instance {index + 1}</h4>
+													<button
+														className="btn btn-danger btn-small"
+														onClick={() => removeArrayItem('radarr_instances', index)}
+													>
+														Remove
+													</button>
+												</div>
+												<SettingItem label="Name">
+													<input
+														type="text"
+														value={instance.name || ''}
+														onChange={(e) =>
+															updateArrayItem('radarr_instances', index, {
+																name: e.target.value,
+															})
+														}
+														placeholder="Radarr"
+													/>
+												</SettingItem>
+												<SettingItem label="URL">
+													<input
+														type="text"
+														value={instance.url || ''}
+														onChange={(e) =>
+															updateArrayItem('radarr_instances', index, {
+																url: e.target.value,
+															})
+														}
+														placeholder="http://radarr:7878"
+													/>
+												</SettingItem>
+												<SettingItem label="API Key">
+													<input
+														type="password"
+														value={instance.api_key || ''}
+														onChange={(e) =>
+															updateArrayItem('radarr_instances', index, {
+																api_key: e.target.value,
+															})
+														}
+														placeholder="API Key"
+													/>
+												</SettingItem>
+												<SettingItem label="Enabled">
+													<Toggle
+														checked={instance.enabled ?? false}
+														onChange={(e) =>
+															updateArrayItem('radarr_instances', index, {
+																enabled: e.target.checked,
+															})
+														}
+													/>
+												</SettingItem>
+											</div>
+										))}
+										{(!config.radarr_instances || config.radarr_instances.length === 0) && (
+											<div className="empty-state" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)', fontStyle: 'italic', marginBottom: '1rem' }}>
+												No Radarr instances configured. Radarr notifications work via webhooks at /webhook/radarr
+											</div>
+										)}
+										<button
+											className="btn btn-secondary"
+											onClick={() => {
+												if (!config.radarr_instances) {
+													updateConfig('radarr_instances', []);
+												}
+												addArrayItem('radarr_instances', {
+													name: '',
+													url: '',
+													api_key: '',
+													enabled: false,
+												});
+											}}
+										>
+											+ Add Radarr Instance
 										</button>
 									</div>
 								)}
