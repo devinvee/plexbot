@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Dict, Any, Set, Deque
 import discord
 
-from config import BotConfig
+from config import BotConfig, bot_config
 from media_watcher_utils import (
     fetch_tmdb_movie_details,
     get_discord_user_ids_for_tags,
@@ -563,9 +563,69 @@ def api_notifications():
     })
 
 
+@app.route('/api/config', methods=['GET'])
+def api_get_config():
+    """Returns the full configuration."""
+    try:
+        import json
+        from utils import load_config
+        CONFIG_FILE = "config.json"
+        
+        # Load raw config (with placeholders)
+        with open(CONFIG_FILE, 'r') as f:
+            raw_config = json.load(f)
+        
+        return jsonify({
+            "success": True,
+            "config": raw_config
+        })
+    except Exception as e:
+        logger.error(f"Error loading config: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/config', methods=['PUT'])
+def api_update_config():
+    """Updates the full configuration and reloads it."""
+    bot_instance = app.config.get('discord_bot')
+    if not bot_instance:
+        return jsonify({"error": "Bot instance not available"}), 500
+    
+    try:
+        import json
+        from utils import load_config
+        CONFIG_FILE = "config.json"
+        
+        data = request.json
+        if 'config' not in data:
+            return jsonify({"success": False, "error": "Missing 'config' in request"}), 400
+        
+        new_config = data['config']
+        
+        # Save to file
+        with open(CONFIG_FILE, 'w') as f:
+            json.dump(new_config, f, indent=2)
+        
+        logger.info("Config file updated, reloading configuration...")
+        
+        # Reload config (this updates the in-memory config)
+        processed_config = load_config(CONFIG_FILE)
+        
+        # Update bot instance config reference (bot_config is updated by load_config)
+        bot_instance.config = bot_config
+        
+        return jsonify({
+            "success": True,
+            "message": "Configuration updated and reloaded successfully"
+        })
+    except Exception as e:
+        logger.error(f"Error updating config: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route('/api/settings', methods=['GET'])
 def api_get_settings():
-    """Returns current settings."""
+    """Returns current settings (legacy endpoint for backward compatibility)."""
     bot_instance = app.config.get('discord_bot')
     if not bot_instance:
         return jsonify({"error": "Bot instance not available"}), 500
