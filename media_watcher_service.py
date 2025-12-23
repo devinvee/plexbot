@@ -204,7 +204,9 @@ async def _process_and_send_buffered_notifications(series_id: str, bot_instance:
             },
             'quality': quality_string,
             'timestamp': datetime.now().isoformat(),
-            'episode_count': ep_count
+            'episode_count': ep_count,
+            'poster_url': poster_url if poster_url and poster_url.startswith("http") else None,
+            'fanart_url': fanart_url if fanart_url and fanart_url.startswith("http") else None
         })
         
         # Trigger Plex scan if enabled
@@ -368,12 +370,25 @@ async def radarr_webhook_detailed():
         asyncio.run_coroutine_threadsafe(coro, bot_instance.loop)
         
         # Record notification in history
+        # Build image URLs from TMDB data
+        poster_url = None
+        backdrop_url = None
+        if tmdb_details:
+            poster_path = tmdb_details.get('poster_path')
+            backdrop_path = tmdb_details.get('backdrop_path')
+            if poster_path:
+                poster_url = f"https://image.tmdb.org/t/p/w300{poster_path}"
+            if backdrop_path:
+                backdrop_url = f"https://image.tmdb.org/t/p/w1280{backdrop_path}"
+        
         NOTIFICATION_HISTORY.append({
             'type': 'radarr',
             'title': title,
             'year': year,
             'quality': quality,
-            'timestamp': datetime.now().isoformat()
+            'timestamp': datetime.now().isoformat(),
+            'poster_url': poster_url,
+            'backdrop_url': backdrop_url
         })
         
         # Trigger Plex scan if enabled

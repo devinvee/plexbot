@@ -207,19 +207,40 @@ function App() {
 										</span>
 									</div>
 									<div className="notification-content">
-										<h4>{notif.title}</h4>
-										{notif.episode && (
-											<p>
-												S{notif.episode.season}E
-												{notif.episode.number}:{' '}
-												{notif.episode.title}
-											</p>
-										)}
-										{notif.quality && (
-											<p className="notification-quality">
-												Quality: {notif.quality}
-											</p>
-										)}
+										<div className="notification-media">
+											{(notif.poster_url || notif.fanart_url || notif.backdrop_url) && (
+												<div className="notification-image">
+													<img
+														src={notif.poster_url || notif.fanart_url || notif.backdrop_url}
+														alt={notif.title}
+														onError={(e) => {
+															// Fallback if image fails to load
+															e.target.style.display = 'none';
+														}}
+													/>
+												</div>
+											)}
+											<div className="notification-text">
+												<h4>{notif.title}{notif.year && ` (${notif.year})`}</h4>
+												{notif.episode && (
+													<p>
+														S{notif.episode.season}E
+														{notif.episode.number}:{' '}
+														{notif.episode.title}
+													</p>
+												)}
+												{notif.quality && (
+													<p className="notification-quality">
+														Quality: {notif.quality}
+													</p>
+												)}
+												{notif.episode_count && notif.episode_count > 1 && (
+													<p className="notification-batch">
+														{notif.episode_count} episodes in this batch
+													</p>
+												)}
+											</div>
+										</div>
 									</div>
 								</div>
 							))
