@@ -152,9 +152,12 @@ body {
 }
 
 .notifications-list {
-	display: flex;
-	flex-direction: column;
-	gap: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  max-height: 600px;
+  overflow-y: auto;
+  padding-right: 0.5rem;
 }
 
 .notification-card {
