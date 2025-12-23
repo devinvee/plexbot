@@ -28,8 +28,12 @@ function App() {
 	const [loading, setLoading] = useState(true);
 	const [showSettings, setShowSettings] = useState(false);
 	const [showScanModal, setShowScanModal] = useState(false);
+	const [showNotificationDetails, setShowNotificationDetails] = useState(false);
+	const [selectedNotification, setSelectedNotification] = useState(null);
 	const [scanning, setScanning] = useState(false);
 	const [scanResult, setScanResult] = useState(null);
+	const [notificationFilter, setNotificationFilter] = useState('all');
+	const [notificationSearch, setNotificationSearch] = useState('');
 
 	useEffect(() => {
 		fetchStatus();
@@ -62,6 +66,18 @@ function App() {
 			console.error('Failed to fetch notifications:', error);
 		}
 	};
+
+	// Filter notifications based on search and type filter
+	const filteredNotifications = notifications.filter((notif) => {
+		const matchesType =
+			notificationFilter === 'all' || notif.type === notificationFilter;
+		const matchesSearch =
+			!notificationSearch ||
+			notif.title.toLowerCase().includes(notificationSearch.toLowerCase()) ||
+			(notif.episode?.title &&
+				notif.episode.title.toLowerCase().includes(notificationSearch.toLowerCase()));
+		return matchesType && matchesSearch;
+	});
 
 	const triggerPlexScan = async (libraryName = null) => {
 		setScanning(true);
@@ -116,6 +132,60 @@ function App() {
 			</header>
 
 			<main className="app-main">
+				<section className="quick-actions-section">
+					<h2>Quick Actions</h2>
+					<div className="quick-actions-grid">
+						<button
+							className="quick-action-btn"
+							onClick={() => setShowScanModal(true)}
+						>
+							<div className="quick-action-icon">🔍</div>
+							<div className="quick-action-label">Scan Plex Library</div>
+						</button>
+						<button
+							className="quick-action-btn"
+							onClick={async () => {
+								try {
+									const response = await fetch(`${API_BASE}/plex/scan`, {
+										method: 'POST',
+										headers: { 'Content-Type': 'application/json' },
+										body: JSON.stringify({ library_name: null }),
+									});
+									const data = await response.json();
+									if (data.success) {
+										alert('Plex scan triggered successfully!');
+									} else {
+										alert(`Error: ${data.message}`);
+									}
+								} catch (error) {
+									alert('Failed to trigger scan');
+								}
+							}}
+						>
+							<div className="quick-action-icon">⚡</div>
+							<div className="quick-action-label">Quick Scan All</div>
+						</button>
+						<button
+							className="quick-action-btn"
+							onClick={() => {
+								fetchStatus();
+								fetchNotifications();
+								alert('Dashboard refreshed!');
+							}}
+						>
+							<div className="quick-action-icon">🔄</div>
+							<div className="quick-action-label">Refresh Dashboard</div>
+						</button>
+						<button
+							className="quick-action-btn"
+							onClick={() => setShowSettings(true)}
+						>
+							<div className="quick-action-icon">⚙️</div>
+							<div className="quick-action-label">Open Settings</div>
+						</button>
+					</div>
+				</section>
+
 				<section className="status-section">
 					<h2>System Status</h2>
 					<div className="status-grid">
@@ -185,15 +255,46 @@ function App() {
 				</section>
 
 				<section className="notifications-section">
-					<h2>Recent Notifications</h2>
+					<div className="notifications-header">
+						<h2>Recent Notifications</h2>
+						<div className="notifications-controls">
+							<input
+								type="text"
+								className="notification-search"
+								placeholder="Search notifications..."
+								value={notificationSearch}
+								onChange={(e) => setNotificationSearch(e.target.value)}
+							/>
+							<select
+								className="notification-filter"
+								value={notificationFilter}
+								onChange={(e) => setNotificationFilter(e.target.value)}
+							>
+								<option value="all">All Types</option>
+								<option value="sonarr">Sonarr</option>
+								<option value="radarr">Radarr</option>
+								<option value="readarr">Readarr</option>
+							</select>
+						</div>
+					</div>
 					<div className="notifications-list">
-						{notifications.length === 0 ? (
+						{filteredNotifications.length === 0 ? (
 							<div className="empty-state">
-								No notifications in the last 24 hours
+								{notifications.length === 0
+									? 'No notifications in the last 24 hours'
+									: 'No notifications match your filters'}
 							</div>
 						) : (
-							notifications.map((notif, idx) => (
-								<div key={idx} className="notification-card">
+							filteredNotifications.map((notif, idx) => (
+								<div
+									key={idx}
+									className="notification-card"
+									onClick={() => {
+										setSelectedNotification(notif);
+										setShowNotificationDetails(true);
+									}}
+									style={{ cursor: 'pointer' }}
+								>
 									<div className="notification-header">
 										<span
 											className={`notification-type ${notif.type}`}
@@ -311,6 +412,88 @@ function App() {
 				onClose={() => setShowSettings(false)}
 				status={status}
 			/>
+
+			<Modal
+				isOpen={showNotificationDetails}
+				onClose={() => {
+					setShowNotificationDetails(false);
+					setSelectedNotification(null);
+				}}
+				title="Notification Details"
+			>
+				{selectedNotification && (
+					<div className="notification-details">
+						<div className="notification-details-header">
+							<div className="notification-details-image">
+								{(selectedNotification.poster_url ||
+									selectedNotification.fanart_url ||
+									selectedNotification.backdrop_url) && (
+									<img
+										src={
+											selectedNotification.poster_url ||
+											selectedNotification.fanart_url ||
+											selectedNotification.backdrop_url
+										}
+										alt={selectedNotification.title}
+										onError={(e) => {
+											e.target.style.display = 'none';
+										}}
+									/>
+								)}
+							</div>
+							<div className="notification-details-info">
+								<h3>
+									{selectedNotification.title}
+									{selectedNotification.year && ` (${selectedNotification.year})`}
+								</h3>
+								<div className="notification-details-meta">
+									<span
+										className={`notification-type ${selectedNotification.type}`}
+									>
+										{selectedNotification.type}
+									</span>
+									<span className="notification-time">
+										{new Date(
+											selectedNotification.timestamp
+										).toLocaleString()}
+									</span>
+								</div>
+								{selectedNotification.quality && (
+									<p className="notification-quality">
+										<strong>Quality:</strong> {selectedNotification.quality}
+									</p>
+								)}
+								{selectedNotification.episode_count &&
+									selectedNotification.episode_count > 1 && (
+										<p className="notification-batch">
+											<strong>Batch:</strong>{' '}
+											{selectedNotification.episode_count} episodes
+										</p>
+									)}
+							</div>
+						</div>
+						{selectedNotification.episode && (
+							<div className="notification-details-episode">
+								<h4>Episode Information</h4>
+								<p>
+									<strong>Season:</strong> {selectedNotification.episode.season}
+								</p>
+								<p>
+									<strong>Episode:</strong> {selectedNotification.episode.number}
+								</p>
+								<p>
+									<strong>Title:</strong> {selectedNotification.episode.title}
+								</p>
+								<p>
+									<strong>Episode Code:</strong> S
+									{selectedNotification.episode.season.toString().padStart(2, '0')}E
+									{selectedNotification.episode.number.toString().padStart(2, '0')}
+								</p>
+							</div>
+						)}
+					</div>
+				)}
+			</Modal>
 		</div>
 	);
 }
