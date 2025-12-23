@@ -1,17 +1,13 @@
 {
 	"discord": {
-		"notification_channel_id": "${DISCORD_CHANNEL_ID}",
-		"dm_notifications_enabled": true
+		"sonarr_notification_channel_id": "${SONARR_CHANNEL_ID}",
+		"radarr_notification_channel_id": "${RADARR_CHANNEL_ID}",
+		"dm_notifications_enabled": false
 	},
 	"new_user_invite": {
 		"enabled": true,
 		"role_id": "${NEW_USER_ROLE_ID}",
 		"invite_link": "${INVITE_LINK}"
-	},
-	"overseerr": {
-		"base_url": "${OVERSEERR_BASE_URL}",
-		"api_key": "${OVERSEERR_API_KEY}",
-		"refresh_interval_minutes": 60
 	},
 	"overseerr": {
 		"base_url": "${OVERSEERR_BASE_URL}",
@@ -40,8 +36,14 @@
 	],
 	"user_mappings": {
 		"plex_to_discord": {
-			"devinvee": "${DEVINVEE_DISCORD_ID}"
+			"devinvee": "361767752010170368",
+			"brianj669": "195018507354767360",
+			"techman2744": "673331918556626975",
+			"jakejakoby": "198614767739338752"
 		}
+	},
+	"tmdb": {
+		"api_key": "${TMDB_API_KEY}"
 	},
 	"log_level": "${LOG_LEVEL}"
 }

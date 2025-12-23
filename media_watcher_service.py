@@ -1,638 +1,661 @@
-import os
-import json
-import logging
-from flask import Flask, request, jsonify
+"""
+Media watcher service for the Plex Discord Bot.
+"""
 import asyncio
-import requests
-import re
-from collections import deque
-import discord
+import logging
+from collections import deque, defaultdict
 from datetime import datetime
-import asyncio
-import logging
-from collections import deque, defaultdict  # Add defaultdict
-from datetime import datetime, timedelta  # Add timedelta
+from flask import Flask, request, jsonify, send_from_directory
+from pathlib import Path
+from typing import Dict, Any, Set, Deque
+import discord
 
+from config import BotConfig
+from media_watcher_utils import (
+    fetch_tmdb_movie_details,
+    get_discord_user_ids_for_tags,
+    fetch_overseerr_users,
+)
+from plex_utils import scan_plex_library_async
 
-# Import the shared utility function (assuming utils.py is in the same directory)
-from utils import load_config
-
-# Get a logger for this module. It will inherit its level from the root logger configured in bot.py.
 logger = logging.getLogger(__name__)
 
-# --- Configuration Loading ---
-# This module still needs to load the configuration for its own settings,
-# unrelated to the global logging level setup.
-CONFIG_FILE = "config.json"
-config = {}  # Initialize config #
-try:
-    config = load_config(CONFIG_FILE)
-    # This log will use the logging configuration set up in bot.py
-    logger.info("Configuration loaded successfully in media_watcher_service.")
-except (FileNotFoundError, json.JSONDecodeError) as e:
-    logger.error(
-        f"Error loading configuration in media_watcher_service: {e}. Exiting.")
-    exit(1)  # Exit if essential config cannot be loaded #
-# --- END Configuration Loading ---
+# --- State Management ---
+EPISODE_NOTIFICATION_BUFFER: Dict[str, list] = defaultdict(list)
+SERIES_NOTIFICATION_TIMERS: Dict[str, asyncio.TimerHandle] = {}
+NOTIFIED_EPISODES_CACHE: Deque[tuple] = deque(maxlen=1000)
+NOTIFIED_MOVIES_CACHE: Deque[tuple] = deque(maxlen=1000)
+OVERSEERR_USERS_DATA: Dict[str, dict] = {}
+NOTIFICATION_HISTORY: Deque[Dict[str, Any]] = deque(maxlen=100)  # Store last 100 notifications
 
-# --- Specific Logger Level Adjustments for this Module ---
-# Adjust log levels for chatty libraries used specifically or heavily by this module.
-# 'werkzeug' is for the Flask server logs.
-# 'requests' can also be set here if this module requires a different verbosity for it,
-# or this line can be removed if bot.py sets a global level for 'requests'.
-logging.getLogger('requests').setLevel(logging.WARNING)
-logging.getLogger('werkzeug').setLevel(logging.WARNING)
-# --- END Specific Logger Level Adjustments ---
-
-# --- Global Variables for Debouncing ---
-EPISODE_NOTIFICATION_BUFFER = defaultdict(list)
-# Stores { series_id: [episode_data_1, episode_data_2, ...], ... }
-
-SERIES_NOTIFICATION_TIMERS = {}
-# Stores { series_id: asyncio.TimerHandle, ... }
-
-DEBOUNCE_SECONDS = 60  # configurable: e.g., 60 seconds to wait for more episodes
-
-
-# Ensure required config sections exist
-DISCORD_CONFIG = config.get("discord", {})
-OVERSEERR_CONFIG = config.get("overseerr", {})
-SONARR_INSTANCES = config.get("sonarr_instances", [])
-USER_MAPPINGS = config.get("user_mappings", {}).get("plex_to_discord", {})
-
-NOTIFICATION_CHANNEL_ID = DISCORD_CONFIG.get("notification_channel_id")
-DM_NOTIFICATIONS_ENABLED = DISCORD_CONFIG.get("dm_notifications_enabled", True)
-
-if not NOTIFICATION_CHANNEL_ID:
-    logger.warning(
-        "Discord notification_channel_id not set in config.json. Only DMs (if enabled) will work.")
-
-# --- Global State for User Data and De-duplication ---
-OVERSEERR_USERS_DATA = {}
-NOTIFIED_EPISODES_CACHE = deque(maxlen=1000)
+DEBOUNCE_SECONDS = 60
 
 app = Flask(__name__)
 
-# --- Helper Functions ---
+# --- Core Notification Logic ---
 
 
-async def _process_and_send_buffered_notifications(series_id, bot_instance):
-    logger.info(
-        f"Timer expired for series ID {series_id}. Processing buffered notifications.")
-
-    buffered_items = EPISODE_NOTIFICATION_BUFFER.pop(series_id, [])
-    if series_id in SERIES_NOTIFICATION_TIMERS:
-        del SERIES_NOTIFICATION_TIMERS[series_id]
-
-    if not buffered_items:
-        logger.info(f"Buffer for series ID {series_id} was empty. No action.")
-        return
-
-    # Add all processed episode unique IDs to the global cache now
-    for item in buffered_items:
-        if item["episode_unique_id"] not in NOTIFIED_EPISODES_CACHE:
-            NOTIFIED_EPISODES_CACHE.append(item["episode_unique_id"])
-            logger.debug(
-                f"Added {item['episode_unique_id']} to NOTIFIED_EPISODES_CACHE.")
-        else:
-            logger.debug(
-                f"{item['episode_unique_id']} was already in NOTIFIED_EPISODES_CACHE, re-confirming.")
-
-    # Use data from the most recently added episode for the main embed details
-    # Or sort by airdate/dateAdded if preferred
-    latest_item = buffered_items[-1]
-    main_episode_data = latest_item['episode_data']
-    series_data = latest_item['series_data_ref']
-    release_data_for_main_ep = latest_item['release_data_ref']
-    # This is the matched file for the 'latest_item'
-    ep_file_for_main_ep = latest_item.get('specific_episode_file_info')
-
-    series_title = series_data.get('title', "Unknown Series")
-    series_year = series_data.get('year')
-
-    season_number = main_episode_data.get('seasonNumber', 0)
-    episode_number = main_episode_data.get('episodeNumber', 0)
-    episode_title = main_episode_data.get('title', "Unknown Episode")
-    episode_overview = main_episode_data.get(
-        'overview', "No overview available.")
-    air_date_utc_str = main_episode_data.get('airDateUtc')
-
-    # --- Quality Extraction for the main_episode_data (latest episode in batch) ---
-    quality_string = "N/A"
-    if ep_file_for_main_ep and isinstance(ep_file_for_main_ep, dict):
-        custom_formats_list = ep_file_for_main_ep.get('customFormats')
-        custom_formats_str = ""
-        if custom_formats_list and isinstance(custom_formats_list, list) and custom_formats_list:
-            custom_formats_str = f" ({', '.join(custom_formats_list)})"
-
-        q_obj = ep_file_for_main_ep.get('quality')
-        if isinstance(q_obj, str):
-            quality_string = q_obj + custom_formats_str
-        elif isinstance(q_obj, dict):  # Nested quality object
-            base_quality_info = q_obj.get('quality')
-            if base_quality_info and isinstance(base_quality_info, dict) and base_quality_info.get('name'):
-                quality_string = base_quality_info.get('name')
-
-            if not custom_formats_str:  # Check nested if not found at file level
-                nested_custom_formats = q_obj.get('customFormats')
-                if nested_custom_formats and isinstance(nested_custom_formats, list) and nested_custom_formats:
-                    custom_formats_str = f" ({', '.join(nested_custom_formats)})"
-
-            if quality_string != "N/A" or custom_formats_str:
-                if quality_string == "N/A" and custom_formats_str:
-                    quality_string = custom_formats_str.strip(" ()")
-                elif quality_string != "N/A":
-                    quality_string += custom_formats_str
-        elif quality_string == "N/A" and custom_formats_str:  # Only custom formats at file level
-            quality_string = custom_formats_str.strip(" ()")
-
-    if quality_string == "N/A" and release_data_for_main_ep and isinstance(release_data_for_main_ep, dict):
-        logger.debug(
-            f"Falling back to release_data for quality for {series_title} S{season_number}E{episode_number}")
-        quality_name_from_release = release_data_for_main_ep.get('quality')
-        if quality_name_from_release:
-            quality_string = quality_name_from_release
-
-        custom_formats_from_release = release_data_for_main_ep.get(
-            'customFormats')
-        if custom_formats_from_release and isinstance(custom_formats_from_release, list) and custom_formats_from_release:
-            cf_release_str = f" ({', '.join(custom_formats_from_release)})"
-            if quality_string != "N/A" and quality_string != "":
-                quality_string += cf_release_str
-            elif quality_string == "N/A" and cf_release_str:
-                quality_string = cf_release_str.strip(" ()")
-    # --- End Quality Extraction ---
-
-    embed_title_str = f"{series_title}"
-    if series_year:
-        embed_title_str += f" ({series_year})"
-    embed_title_str += f" (S{season_number:02d}E{episode_number:02d})"
-
-    # Distinct color for debounced
-    final_embed = discord.Embed(
-        title=embed_title_str, color=discord.Color.purple())
-
-    author_name_prefix = "New Episode" if len(
-        buffered_items) == 1 else f"{len(buffered_items)} New Episodes"
-    if bot_instance.user and bot_instance.user.avatar:
-        final_embed.set_author(
-            name=f"{author_name_prefix} Available - Sonarr", icon_url=bot_instance.user.avatar.url)
-    else:
-        final_embed.set_author(name=f"{author_name_prefix} Available - Sonarr")
-
-    final_embed.add_field(name="Latest: " + (episode_title if episode_title else "N/A"),
-                          value=f"S{season_number:02d}E{episode_number:02d}", inline=False)
-    if len(episode_overview) > 256:
-        # Shorter for this style
-        episode_overview = episode_overview[:253] + "..."
-    final_embed.add_field(name="Overview (Latest)",
-                          value=episode_overview if episode_overview else "N/A", inline=False)
-
-    if air_date_utc_str:
-        try:
-            air_date = datetime.fromisoformat(
-                air_date_utc_str.replace('Z', '+00:00'))
-            final_embed.add_field(
-                name="Air Date", value=air_date.strftime('%m/%d/%Y'), inline=True)
-        except ValueError:
-            final_embed.add_field(
-                name="Air Date", value="N/A (unparseable)", inline=True)
-    else:
-        final_embed.add_field(name="Air Date", value="N/A", inline=True)
-    final_embed.add_field(
-        name="Quality", value=quality_string if quality_string else "N/A", inline=True)
-
-    series_images = series_data.get('images', [])
-    poster_url = next((img.get('remoteUrl') or img.get('url')
-                      for img in series_images if img.get('coverType') == 'poster'), None)
-    if poster_url:
-        final_embed.set_thumbnail(url=poster_url)
-
-    fanart_url = None
-    main_ep_specific_file_info = latest_item.get(
-        'specific_episode_file_info', {})
-    # Images from the episode object in 'episodes' array
-    main_ep_images_list = main_episode_data.get('images', [])
-
-    # Prefer episode-specific image if available from Sonarr v4 payload structure (less common)
-    if main_ep_images_list:
-        ep_img_url = main_ep_images_list[0].get(
-            'remoteUrl') or main_ep_images_list[0].get('url')
-        if ep_img_url:
-            fanart_url = ep_img_url
-
-    if not fanart_url:  # Fallback to series fanart
-        fanart_url = next((img.get('remoteUrl') or img.get(
-            'url') for img in series_images if img.get('coverType') == 'fanart'), None)
-
-    if fanart_url:
-        final_embed.set_image(url=fanart_url)
-
-    if len(buffered_items) > 1:
-        other_episodes_strs = []
-        # Sort by season/episode for listing
-        sorted_buffered_items = sorted(buffered_items, key=lambda x: (
-            x['episode_data'].get('seasonNumber', 0), x['episode_data'].get('episodeNumber', 0)))
-
-        for item in sorted_buffered_items:
-            # Only list if it's not the main one we already detailed, or if you want to list all
-            if item['episode_data'].get('id') != main_episode_data.get('id'):
-                s = item['episode_data'].get('seasonNumber', 0)
-                e = item['episode_data'].get('episodeNumber', 0)
-                t = item['episode_data'].get('title', "N/A")
-                other_episodes_strs.append(f"S{s:02d}E{e:02d} - {t}")
-
-        if other_episodes_strs:
-            other_eps_text = "\n".join(other_episodes_strs)
-            if len(other_eps_text) > 1000:  # Max field value length approx
-                other_eps_text = other_eps_text[:1000] + "...\n(and more)"
-            final_embed.add_field(
-                name=f"Also Added ({len(other_episodes_strs)})", value=other_eps_text, inline=False)
-
-    final_embed.set_footer(
-        text=f"{len(buffered_items)} episode(s) in this batch notification.")
-    final_embed.timestamp = datetime.utcnow()
-
-    users_to_ping = get_discord_user_ids_for_tags(series_data.get('tags', []))
-    mentions_text = " ".join(
-        [f"<@{uid}>" for uid in users_to_ping]) if users_to_ping else ""
-
-    try:
-        await send_discord_notification(
-            bot_instance=bot_instance,
-            user_ids=users_to_ping,
-            message_content=mentions_text,
-            channel_id=NOTIFICATION_CHANNEL_ID,
-            embed=final_embed
-        )
-        logger.info(
-            f"Sent DEBOUNCED Discord notification for {series_title}, {len(buffered_items)} episode(s).")
-    except Exception as e:
-        logger.error(
-            f"Error in _process_and_send_buffered_notifications when calling send_discord_notification: {e}", exc_info=True)
-
-
-def normalize_plex_username(username: str) -> str:
-    """Converts a plex username to a consistent format for tag matching."""
-    return username.lower().replace(" ", "")
-
-
-async def fetch_overseerr_users():
-    """Fetches users from Overseerr API and populates OVERSEERR_USERS_DATA."""
-    if not OVERSEERR_CONFIG.get("base_url") or not OVERSEERR_CONFIG.get("api_key"):
-        logger.warning("Overseerr API config missing. Skipping user sync.")
-        return
-
-    url = f"{OVERSEERR_CONFIG['base_url'].rstrip('/')}/api/v1/user"
-    logger.info(f"Attempting to fetch Overseerr users from: {url}")
-
-    headers = {
-        "X-Api-Key": OVERSEERR_CONFIG['api_key'], "Accept": "application/json"}
-
-    try:
-        response = await asyncio.to_thread(requests.get, url, headers=headers, timeout=15)
-
-        logger.info(
-            f"Overseerr API Response Status Code: {response.status_code}")
-        logger.debug(f"Overseerr API Response Headers: {response.headers}")
-        logger.debug(
-            f"Overseerr API Raw Response Text (first 500 chars): {response.text[:500]}...")
-
-        response.raise_for_status()
-        parsed_data = None
-        try:
-            parsed_data = response.json()
-            logger.info("Successfully parsed Overseerr API response as JSON.")
-            logger.debug(f"Type of parsed data object: {type(parsed_data)}")
-            logger.debug(f"Content of parsed data (pageInfo & first 2 results): "
-                         f"pageInfo={parsed_data.get('pageInfo')}, "
-                         f"results (first 2)={parsed_data.get('results', [])[:2]}")
-
-        except requests.exceptions.JSONDecodeError as e:
-            logger.error(
-                f"Failed to decode JSON response from Overseerr: {e}")
-            logger.error(f"Full problematic response text: {response.text}")
-            return
-
-        users_list = parsed_data.get('results')
-
-        if not isinstance(users_list, list):
-            logger.error(
-                f"Overseerr API 'results' key did not contain a list. Got: {type(users_list)}. Cannot process users.")
-            return
-
-        OVERSEERR_USERS_DATA.clear()
-        for user in users_list:
-            if not isinstance(user, dict):
-                logger.warning(
-                    f"Skipping unexpected item in Overseerr users list. Expected dict, got {type(user)}: {user}")
-                continue
-
-            plex_username = user.get('plexUsername')
-
-            if plex_username is None:
-                logger.warning(
-                    f"User {user.get('displayName', user.get('email', user.get('id', 'Unknown')))} has no 'plexUsername'. Skipping for mapping.")
-                continue
-
-            normalized_px_username = normalize_plex_username(plex_username)
-            discord_id = USER_MAPPINGS.get(normalized_px_username)
-
-            if plex_username and discord_id:
-                OVERSEERR_USERS_DATA[normalized_px_username] = {
-                    "discord_id": discord_id,
-                    "original_plex_username": plex_username
-                }
-        logger.info(
-            f"Successfully synced {len(OVERSEERR_USERS_DATA)} Overseerr users.")
-
-    except requests.exceptions.HTTPError as e:
-        logger.error(
-            f"HTTP Error fetching Overseerr users (Status: {e.response.status_code}): {e}")
-        logger.error(f"Response body for HTTP error: {e.response.text}")
-    except requests.exceptions.RequestException as e:
-        logger.error(
-            f"Network or request error fetching Overseerr users: {e}")
-    except Exception as e:
-        logger.error(
-            f"An unexpected error occurred during Overseerr user sync: {e}", exc_info=True)
-
-
-def get_discord_user_ids_for_tags(media_tags: list) -> set:
-    """
-    Returns a set of Discord user IDs to notify based on matching Sonarr tags.
-    Matches if a user's normalized plexUsername is a substring of a normalized media tag.
-    """
-    users_to_notify = set()
-    normalized_media_tags = [tag.lower() for tag in media_tags]
-
-    for normalized_plex_username, user_data in OVERSEERR_USERS_DATA.items():
-        if user_data.get("discord_id"):
-            for media_tag in normalized_media_tags:
-                if normalized_plex_username in media_tag:
-                    users_to_notify.add(user_data["discord_id"])
-                    break
-    logger.debug(f"Users to notify for tags {media_tags}: {users_to_notify}")
-    return users_to_notify
-
-
-async def send_discord_notification(bot_instance, user_ids: set, message_content: str, channel_id: str, embed: discord.Embed = None):
-    """Sends a message with optional embed to a channel and/or DMs users."""
+async def send_discord_notification(
+    bot_instance: discord.Client,
+    config: BotConfig,
+    user_ids: Set[str],
+    message_content: str,
+    channel_id: str,
+    embed: discord.Embed = None,
+):
+    """Sends a message with an optional embed to a channel and DMs users."""
     if not bot_instance:
-        logger.error("Discord bot instance not passed. Cannot send messages.")
+        logger.error(
+            "Discord bot instance not available. Cannot send messages.")
         return
 
-    # Send to the main channel if channel_id is provided
+    # Send to the main channel
     if channel_id:
         try:
-            channel_id_int = int(channel_id)
-            channel = bot_instance.get_channel(channel_id_int)
+            channel = bot_instance.get_channel(int(channel_id))
             if channel:
-                logger.info(
-                    f"Sending notification with embed to channel {channel_id_int}.")
-                await channel.send(content=message_content if message_content else None, embed=embed)
+                await channel.send(content=message_content or None, embed=embed)
+                logger.info(f"Sent notification to channel {channel_id}")
             else:
                 logger.warning(
-                    f"Could not find notification channel with ID: {channel_id}")
-        except ValueError:
+                    f"Could not find notification channel with ID: {channel_id}. Is the bot in the server?")
+        except (ValueError, discord.HTTPException) as e:
             logger.error(
-                f"Invalid notification_channel_id: {channel_id}. Must be an integer.")
-        except Exception as e:
-            logger.error(
-                f"Error sending message/embed to channel {channel_id}: {e}", exc_info=True)
+                f"Error sending message to channel {channel_id}: {e}", exc_info=True)
 
-    # Send DMs if enabled and there are users to notify
-    if DM_NOTIFICATIONS_ENABLED and user_ids:
-        dm_message_content = message_content  # Or a simplified version for DMs
-        for user_id_str in user_ids:
+    # Send DMs
+    if config.discord.dm_notifications_enabled and user_ids:
+        for user_id in user_ids:
             try:
-                user_id_int = int(user_id_str)
-                user = await bot_instance.fetch_user(user_id_int)
-                logger.info(
-                    f"Attempting to DM user {user.name} ({user_id_int}) with embed.")
-                # For DMs, you might choose to send a simpler message or the full embed.
-                # Here, we send the same content and embed as to the channel.
-                await user.send(content=dm_message_content if dm_message_content else None, embed=embed)
-            except ValueError:
-                logger.warning(
-                    f"Discord user ID {user_id_str} is not a valid integer for DM. Skipping.")
-            except discord.NotFound:
-                logger.warning(
-                    f"Discord user with ID {user_id_str} not found for DM.")
-            except discord.Forbidden:
-                logger.warning(
-                    f"Could not DM user {user_id_str}. They might have DMs disabled or bot lacks permission.")
+                user = await bot_instance.fetch_user(int(user_id))
+                await user.send(content=message_content or None, embed=embed)
+            except (ValueError, discord.NotFound, discord.Forbidden) as e:
+                logger.warning(f"Could not send DM to user {user_id}: {e}")
             except Exception as e:
                 logger.error(
-                    f"Error sending DM to {user_id_str}: {e}", exc_info=True)
+                    f"Unexpected error sending DM to {user_id}: {e}", exc_info=True)
+
+
+async def _process_and_send_buffered_notifications(series_id: str, bot_instance: discord.Client, channel_id: str):
+    """Processes buffered episodes for a series and sends a single notification."""
+    # Added broad try/except block to catch silent failures in background tasks
+    try:
+        logger.info(
+            f"Processing buffered notifications for series_id: {series_id}")
+        buffered_items = EPISODE_NOTIFICATION_BUFFER.pop(series_id, [])
+        if series_id in SERIES_NOTIFICATION_TIMERS:
+            SERIES_NOTIFICATION_TIMERS.pop(series_id, None)
+
+        if not buffered_items:
+            logger.warning(
+                f"No buffered items found for series_id: {series_id}")
+            return
+
+        # Mark as notified
+        for item in buffered_items:
+            NOTIFIED_EPISODES_CACHE.append(item.get("episode_unique_id", ""))
+
+        # Use the first item for series metadata
+        latest_item = buffered_items[-1]
+        series_data = latest_item.get('series_data_ref', {})
+        episode_data = latest_item.get('episode_data', {})
+        quality_string = latest_item.get('quality', 'N/A')
+
+        # --- Build Rich Embed (Sonarr) ---
+        embed = discord.Embed(color=0x00A4DC)  # Sonarr Blue
+        embed.set_author(name="New Episode Available - Sonarr",
+                         icon_url="https://i.imgur.com/tV61XQZ.png")
+
+        # Title
+        season_num = episode_data.get('seasonNumber', 0)
+        episode_num = episode_data.get('episodeNumber', 0)
+        ep_string = f"S{season_num:02d}E{episode_num:02d}"
+
+        embed.title = f"{series_data.get('title', 'Unknown Series')} ({series_data.get('year', 'N/A')}) ({ep_string})"
+
+        # Episode Info
+        episode_title = episode_data.get('title', 'Unknown Title')
+        embed.add_field(
+            name=f"Latest: {episode_title}", value=ep_string, inline=False)
+
+        # Overview
+        overview = episode_data.get('overview', '')
+        if overview:
+            if len(overview) > 1000:
+                overview = overview[:997] + "..."
+            embed.add_field(name="Overview (Latest)",
+                            value=overview, inline=False)
+
+        # Details
+        air_date = episode_data.get('airDate', 'N/A')
+        embed.add_field(name="Air Date", value=air_date, inline=True)
+        embed.add_field(name="Quality", value=quality_string, inline=True)
+
+        # Footer
+        ep_count = len(buffered_items)
+        timestamp_str = datetime.now().strftime("%H:%M")
+        embed.set_footer(
+            text=f"{ep_count} episode(s) in this batch notification. • Today at {timestamp_str}")
+
+        # Images
+        # UPDATED: Validation logic to prefer remoteUrl and ensure HTTP
+        images = series_data.get('images', [])
+        poster_url = None
+        fanart_url = None
+
+        for img in images:
+            # Prioritize 'remoteUrl' (TVDB link) over 'url' (often local path)
+            url_to_use = img.get('remoteUrl')
+            if not url_to_use:
+                url_to_use = img.get('url')
+
+            if img.get('coverType') == 'poster':
+                poster_url = url_to_use
+            elif img.get('coverType') == 'fanart':
+                fanart_url = url_to_use
+            elif img.get('coverType') == 'banner':
+                if not fanart_url:
+                    fanart_url = url_to_use
+
+        # Only set if it looks like a valid http URL
+        if fanart_url and fanart_url.startswith("http"):
+            embed.set_image(url=fanart_url)
+        elif fanart_url:
+            logger.warning(f"Skipping invalid/local fanart URL: {fanart_url}")
+
+        if poster_url and poster_url.startswith("http"):
+            embed.set_thumbnail(url=poster_url)
+        elif poster_url:
+            logger.warning(f"Skipping invalid/local poster URL: {poster_url}")
+
+        # --- User Tagging ---
+        user_tags = series_data.get('tags', [])
+        users_to_ping = get_discord_user_ids_for_tags(user_tags)
+
+        mentions_text = ""
+        if users_to_ping:
+            ping_string = " ".join([f"<@{uid}>" for uid in users_to_ping])
+
+            title = series_data.get('title', 'Unknown Series')
+            mentions_text = f"Episode **{ep_string}** of **{title}** is now available! {ping_string}"
+            logger.info(
+                f"Sonarr Notification: Tagging users {users_to_ping} based on tags {user_tags}")
+
+        # Send Notification
+        logger.info("Sending Sonarr embed to Discord...")
+        await send_discord_notification(
+            bot_instance=bot_instance,
+            config=bot_instance.config,
+            user_ids=users_to_ping,
+            message_content=mentions_text,
+            channel_id=channel_id,
+            embed=embed,
+        )
+        
+        # Record notification in history
+        NOTIFICATION_HISTORY.append({
+            'type': 'sonarr',
+            'title': series_data.get('title', 'Unknown Series'),
+            'episode': {
+                'season': season_num,
+                'number': episode_num,
+                'title': episode_title
+            },
+            'quality': quality_string,
+            'timestamp': datetime.now().isoformat(),
+            'episode_count': ep_count
+        })
+        
+        # Trigger Plex scan if enabled
+        if bot_instance.config.plex.scan_on_notification and bot_instance.config.plex.enabled:
+            logger.info("Triggering Plex library scan after Sonarr notification")
+            library_name = bot_instance.config.plex.library_name if bot_instance.config.plex.library_name else None
+            await scan_plex_library_async(library_name)
+    except Exception as e:
+        logger.critical(
+            f"CRITICAL ERROR in _process_and_send_buffered_notifications: {e}", exc_info=True)
 
 # --- Webhook Endpoints ---
 
+# In media_watcher_service.py
 
-# Add near the top of media_watcher_service.py if not already there
 
-# ... (other parts of your media_watcher_service.py file) ...
+@app.route('/webhook/readarr', methods=['POST'])
+async def readarr_webhook():
+    """Handles Readarr 'On Download' / 'On Upgrade' events."""
+    logger.info("Received Readarr webhook request")
+    try:
+        payload = request.json
+        event_type = payload.get('eventType')
+
+        # Updated to include 'Rename' for mass updates
+        if event_type not in ['Download', 'Upgrade', 'Rename', 'Test']:
+            return jsonify({"status": "ignored", "reason": "Unsupported event type"}), 200
+
+        bot_instance = app.config.get('discord_bot')
+        if not bot_instance:
+            return jsonify({"status": "error", "message": "Bot instance missing"}), 500
+
+        # Dispatch the event to the new AudiobookCog
+        # We run this as a task so we don't block the webhook response
+        bot_instance.loop.create_task(
+            bot_instance.get_cog("Audiobook").process_readarr_event(payload)
+        )
+
+        return jsonify({"status": "success", "message": "Event queued for processing"}), 200
+
+    except Exception as e:
+        logger.error(f"Error processing Readarr webhook: {e}", exc_info=True)
+        return jsonify({"status": "error", "message": "Internal server error"}), 500
+
+
+@app.route('/webhook/radarr', methods=['POST'])
+async def radarr_webhook_detailed():
+    """Handles Radarr's 'On Grab' and 'On Download' webhook events."""
+    logger.info("Received Radarr webhook request")
+    try:
+        payload = request.json
+        if not payload:
+            logger.error("No JSON payload received in Radarr webhook")
+            return jsonify({"status": "error", "message": "No JSON payload received"}), 400
+
+        bot_instance = app.config.get('discord_bot')
+        if not bot_instance:
+            logger.error("Discord bot instance missing in Flask config")
+            return jsonify({"status": "error", "message": "Internal server error"}), 500
+
+        config = bot_instance.config
+        tmdb_api_key = config.tmdb.api_key
+
+        event_type = payload.get('eventType')
+        logger.info(f"Radarr Event Type: {event_type}")
+
+        if event_type not in ['Download', 'Grab', 'Test']:
+            return jsonify({"status": "ignored", "reason": "Unsupported event type"}), 200
+
+        if event_type == 'Test':
+            logger.info("Processing Radarr Test Event")
+            return jsonify({"status": "success", "message": "Test event received"}), 200
+
+        movie_data = payload.get('movie', {})
+        movie_file_data = payload.get('movieFile', {})
+        remote_movie_data = payload.get('remoteMovie', {})
+
+        # Deduplication
+        unique_key = (movie_data.get('tmdbId'), movie_file_data.get(
+            'relativePath', 'unknown'), event_type)
+        if unique_key in NOTIFIED_MOVIES_CACHE:
+            logger.info(f"Duplicate Radarr event ignored: {unique_key}")
+            return jsonify({"status": "ignored", "message": "Duplicate event"}), 200
+        NOTIFIED_MOVIES_CACHE.append(unique_key)
+
+        # Fetch TMDB Details
+        tmdb_details = await fetch_tmdb_movie_details(movie_data.get('tmdbId'), tmdb_api_key)
+
+        # --- Build Rich Embed for Radarr ---
+        embed = discord.Embed(color=0xFFC107)  # Radarr Yellow/Gold
+        embed.set_author(name=f"New Movie Available - Radarr",
+                         icon_url="https://i.imgur.com/d1p8gCa.png")
+
+        title = movie_data.get('title', 'Unknown Movie')
+        year = movie_data.get('year', '')
+        embed.title = f"{title} ({year})"
+
+        # Overview
+        overview = movie_data.get('overview', '')
+        if not overview and tmdb_details:
+            overview = tmdb_details.get('overview', '')
+
+        if overview:
+            if len(overview) > 1000:
+                overview = overview[:997] + "..."
+            embed.add_field(name="Overview", value=overview, inline=False)
+
+        # Details
+        quality = movie_file_data.get(
+            'quality', remote_movie_data.get('quality', 'N/A'))
+        embed.add_field(name="Quality", value=quality, inline=True)
+
+        release_date = movie_data.get(
+            'inCinemas') or movie_data.get('physicalRelease')
+        if release_date:
+            embed.add_field(name="Release Date",
+                            value=release_date, inline=True)
+
+        # Images (Prefer TMDB, fallback to payload)
+        poster_path = tmdb_details.get('poster_path')
+        backdrop_path = tmdb_details.get('backdrop_path')
+
+        if backdrop_path:
+            embed.set_image(
+                url=f"https://image.tmdb.org/t/p/w1280{backdrop_path}")
+        elif poster_path:
+            embed.set_image(
+                url=f"https://image.tmdb.org/t/p/w780{poster_path}")
+
+        if poster_path:
+            embed.set_thumbnail(
+                url=f"https://image.tmdb.org/t/p/w300{poster_path}")
+
+        # --- Tagging ---
+        user_tags = movie_data.get('tags', [])
+        user_ids_to_notify = get_discord_user_ids_for_tags(user_tags)
+
+        mentions = ""
+        if user_ids_to_notify:
+            ping_string = " ".join([f"<@{uid}>" for uid in user_ids_to_notify])
+            title = movie_data.get('title', 'Unknown Movie')
+
+            # Combine Title + Pings
+            mentions = f"New Movie: **{title}** {ping_string}"
+
+            logger.info(
+                f"Radarr Notification: Tagging users {user_ids_to_notify} based on tags {user_tags}")
+
+        # Construct notification coroutine
+        coro = send_discord_notification(
+            bot_instance,
+            config,
+            user_ids_to_notify,
+            mentions,
+            config.discord.radarr_notification_channel_id,
+            embed
+        )
+        # Schedule it safely
+        asyncio.run_coroutine_threadsafe(coro, bot_instance.loop)
+        
+        # Record notification in history
+        NOTIFICATION_HISTORY.append({
+            'type': 'radarr',
+            'title': title,
+            'year': year,
+            'quality': quality,
+            'timestamp': datetime.now().isoformat()
+        })
+        
+        # Trigger Plex scan if enabled
+        if config.plex.scan_on_notification and config.plex.enabled:
+            logger.info("Triggering Plex library scan after Radarr notification")
+            library_name = config.plex.library_name if config.plex.library_name else None
+            scan_coro = scan_plex_library_async(library_name)
+            asyncio.run_coroutine_threadsafe(scan_coro, bot_instance.loop)
+
+        return jsonify({"status": "success"}), 200
+    except Exception as e:
+        logger.error(f"Error processing Radarr webhook: {e}", exc_info=True)
+        return jsonify({"status": "error", "message": "Internal server error"}), 500
 
 
 @app.route('/webhook/sonarr', methods=['POST'])
 async def sonarr_webhook():
-    payload = request.json
-    logger.info(
-        f"Received Sonarr webhook: {payload.get('eventType')} from {request.remote_addr}")
-    logger.debug(f"Sonarr webhook payload: {json.dumps(payload, indent=2)}")
+    """Handles Sonarr's 'On Grab' and 'On Download' webhook events with debouncing."""
+    logger.info("Received Sonarr webhook request")
+    try:
+        payload = request.json
+        if not payload:
+            logger.error("No JSON payload received in Sonarr webhook")
+            return jsonify({"status": "error", "message": "No JSON payload received"}), 400
 
-    event_type = payload.get('eventType')
-    bot_instance = app.config.get('discord_bot')
+        bot_instance = app.config.get('discord_bot')
+        if not bot_instance:
+            logger.error("Discord bot instance missing in Flask config")
+            return jsonify({"status": "error", "message": "Internal server error"}), 500
 
-    if not bot_instance:
-        logger.error(
-            "Discord bot instance not found in Flask app config. Cannot process webhook.")
-        return jsonify({"status": "error", "message": "Bot instance not configured"}), 500
+        config = bot_instance.config
 
-    if event_type == "Test":
-        logger.info("Sonarr Test webhook received and processed successfully!")
-        test_notification_message = "Sonarr webhook test successful! Connectivity is confirmed."
+        event_type = payload.get('eventType')
+        logger.info(f"Sonarr Event Type: {event_type}")
 
-        embed = discord.Embed(
-            title="Sonarr Test Successful!",
-            description="This confirms that your Plexbot is receiving webhooks from Sonarr correctly.",
-            color=discord.Color.green()
-        )
-        if bot_instance.user and bot_instance.user.avatar:
-            embed.set_author(name="Plexbot Notification Service",
-                             icon_url=bot_instance.user.avatar.url)
-        else:
-            embed.set_author(name="Plexbot Notification Service")
-        embed.timestamp = datetime.utcnow()
+        # ADDED 'Test' to supported events so you can see logs when testing!
+        if event_type not in ['Download', 'EpisodeImport', 'Grab', 'Test']:
+            logger.info(f"Ignored Sonarr event type: {event_type}")
+            return jsonify({"status": "ignored", "reason": "Unsupported event type"}), 200
 
-        if NOTIFICATION_CHANNEL_ID:
-            coro = send_discord_notification(
-                bot_instance=bot_instance,
-                user_ids=set(),
-                message_content=None,  # No pings for a test message
-                channel_id=NOTIFICATION_CHANNEL_ID,
-                embed=embed
+        series_data = payload.get('series', {})
+        series_id = series_data.get('id')
+
+        # --- Handle Test Event Immediately ---
+        if event_type == 'Test':
+            logger.info(
+                "Processing Sonarr Test Event (Simulating notification)")
+            # Create dummy episode data for the test
+            dummy_episode = {
+                "seasonNumber": 1,
+                "episodeNumber": 1,
+                "title": "Test Episode",
+                "overview": "This is a test notification from Sonarr to verify Discord integration.",
+                "airDate": datetime.now().strftime("%Y-%m-%d")
+            }
+            # Put it in buffer directly
+            EPISODE_NOTIFICATION_BUFFER[series_id].append({
+                "episode_data": dummy_episode,
+                "episode_unique_id": f"test_{datetime.now().timestamp()}",
+                "series_data_ref": series_data,
+                "quality": "Test Quality 1080p"
+            })
+
+            # Fire immediately, bypassing debounce
+            coro = _process_and_send_buffered_notifications(
+                series_id,
+                bot_instance,
+                config.discord.sonarr_notification_channel_id
             )
-            future = asyncio.run_coroutine_threadsafe(coro, bot_instance.loop)
-            try:
-                future.result(timeout=10)
-                logger.info("Discord notification for Sonarr Test completed.")
-            except asyncio.TimeoutError:
-                logger.error(
-                    "Sending Discord notification for Sonarr Test timed out.")
-            except Exception as e:
-                logger.error(
-                    f"Error running Sonarr Test Discord notification: {e}", exc_info=True)
-        else:
-            logger.warning(
-                "Discord notification_channel_id not set; cannot send Sonarr Test notification.")
+            asyncio.run_coroutine_threadsafe(coro, bot_instance.loop)
+            return jsonify({"status": "success", "message": "Test event processed"}), 200
 
-        return jsonify({"status": "success", "message": "Test webhook processed successfully"}), 200
-
-    elif event_type in ['Download', 'Episode Imported']:
-        series_data_from_payload = payload.get('series', {})
-        episodes_payload_list = payload.get('episodes', [])
-        release_data_from_payload = payload.get('release', {})
-
-        all_episode_files_from_payload = payload.get('episodeFiles', [])
-        singular_episode_file_from_payload = payload.get('episodeFile')
-
-        if not series_data_from_payload or not episodes_payload_list:
-            logger.warning("Webhook missing series or episodes data.")
-            return jsonify({"status": "error", "message": "Missing series or episode data"}), 400
-
-        series_id = series_data_from_payload.get('id')
         if not series_id:
-            logger.warning("Webhook payload missing series ID. Cannot buffer.")
+            logger.error("Missing series ID in Sonarr payload")
             return jsonify({"status": "error", "message": "Missing series ID"}), 400
 
-        newly_buffered_count = 0
-        for episode_data in episodes_payload_list:
-            ep_id = episode_data.get('id')
-            s_num = episode_data.get('seasonNumber')
-            ep_num = episode_data.get('episodeNumber')
+        # Extract Quality
+        quality = "N/A"
+        if 'episodeFile' in payload and 'quality' in payload['episodeFile']:
+            quality = payload['episodeFile']['quality']
+        elif 'release' in payload and 'quality' in payload['release']:
+            quality = payload['release']['quality']
 
-            current_episode_file_info_for_key = None
-            if singular_episode_file_from_payload and len(episodes_payload_list) == 1:
-                current_episode_file_info_for_key = singular_episode_file_from_payload
-            elif all_episode_files_from_payload:
-                for ef_data in all_episode_files_from_payload:
-                    path_segment_to_match = f"S{s_num:02d}E{ep_num:02d}"
-                    if (ef_data.get('relativePath') and path_segment_to_match in ef_data['relativePath']) or \
-                       (ef_data.get('sceneName') and path_segment_to_match in ef_data['sceneName']):
-                        current_episode_file_info_for_key = ef_data
-                        break
-                if not current_episode_file_info_for_key and all_episode_files_from_payload:
-                    # Fallback if specific match fails but files are present (e.g. take first if relevant)
-                    # This might need adjustment based on how Sonarr structures 'episodeFiles' for multi-episode 'episodes' lists
-                    pass  # current_episode_file_info_for_key remains None or use a general one
-
-            unique_key_parts = [series_id, ep_id]
-            if current_episode_file_info_for_key and current_episode_file_info_for_key.get('relativePath'):
-                unique_key_parts.append(
-                    current_episode_file_info_for_key.get('relativePath'))
-            elif release_data_from_payload.get('releaseTitle'):
-                unique_key_parts.append(
-                    release_data_from_payload.get('releaseTitle'))
-            elif current_episode_file_info_for_key and current_episode_file_info_for_key.get('sceneName'):
-                unique_key_parts.append(
-                    current_episode_file_info_for_key.get('sceneName'))
-
-            episode_unique_id = tuple(unique_key_parts)
-
-            if episode_unique_id in NOTIFIED_EPISODES_CACHE:
+        for episode_data in payload.get('episodes', []):
+            unique_id = (series_id, episode_data.get('id'))
+            if unique_id in NOTIFIED_EPISODES_CACHE:
                 logger.info(
-                    f"Episode S{s_num:02d}E{ep_num:02d} (key: {episode_unique_id}) already in global NOTIFIED_EPISODES_CACHE. Skipping for buffer.")
+                    f"Skipping duplicate episode notification: {unique_id}")
                 continue
 
-            already_in_buffer = False
-            for buffered_item_check in EPISODE_NOTIFICATION_BUFFER.get(series_id, []):
-                if buffered_item_check["episode_unique_id"] == episode_unique_id:
-                    already_in_buffer = True
-                    break
-            if already_in_buffer:
-                logger.debug(
-                    f"Episode S{s_num:02d}E{ep_num:02d} (key: {episode_unique_id}) already in current buffer for series {series_id}. Skipping.")
-                continue
+            EPISODE_NOTIFICATION_BUFFER[series_id].append({
+                "episode_data": episode_data,
+                "episode_unique_id": unique_id,
+                "series_data_ref": series_data,
+                "quality": quality
+            })
 
-            buffered_item = {
-                "episode_data": dict(episode_data),
-                "episode_unique_id": episode_unique_id,
-                "series_data_ref": series_data_from_payload,
-                "release_data_ref": release_data_from_payload,
-                "specific_episode_file_info": dict(current_episode_file_info_for_key) if current_episode_file_info_for_key else None,
-            }
-            EPISODE_NOTIFICATION_BUFFER[series_id].append(buffered_item)
-            newly_buffered_count += 1
-            logger.debug(
-                f"Buffered episode S{s_num:02d}E{ep_num:02d} for series {series_id}. Key: {episode_unique_id}")
+        if series_id in SERIES_NOTIFICATION_TIMERS:
+            SERIES_NOTIFICATION_TIMERS[series_id].cancel()
 
-        if newly_buffered_count > 0:
-            if series_id in SERIES_NOTIFICATION_TIMERS:
-                SERIES_NOTIFICATION_TIMERS[series_id].cancel()
-                logger.debug(
-                    f"Cancelled existing timer for series ID {series_id}.")
-
-            loop = bot_instance.loop
-            timer_handle = loop.call_later(
-                DEBOUNCE_SECONDS,
-                lambda s_id=series_id, b_inst=bot_instance: asyncio.run_coroutine_threadsafe(
-                    _process_and_send_buffered_notifications(s_id, b_inst),
-                    loop
-                )
+        # Define a safe callback function for call_later
+        def schedule_notification():
+            logger.info(f"Timer fired for series_id: {series_id}")
+            coro = _process_and_send_buffered_notifications(
+                series_id,
+                bot_instance,
+                config.discord.sonarr_notification_channel_id
             )
-            SERIES_NOTIFICATION_TIMERS[series_id] = timer_handle
-            logger.info(
-                f"Scheduled/Reset notification for series ID {series_id} in {DEBOUNCE_SECONDS}s. Buffered {newly_buffered_count} new episode(s) from this webhook. Total in buffer for series: {len(EPISODE_NOTIFICATION_BUFFER[series_id])}")
-        else:
-            logger.info(
-                "No new episodes from this webhook to buffer after de-duplication checks.")
+            asyncio.run_coroutine_threadsafe(coro, bot_instance.loop)
 
-        return jsonify({"status": "success", "message": "Webhook data processed for buffering"}), 200
-
-    else:
+        # Schedule the debounce timer
         logger.info(
-            f"Sonarr event type '{event_type}' is not explicitly handled. Ignoring.")
-        return jsonify({"status": "ignored", "message": f"Event type '{event_type}' not handled"}), 200
+            f"Scheduling notification for series {series_id} in {DEBOUNCE_SECONDS} seconds")
+        SERIES_NOTIFICATION_TIMERS[series_id] = bot_instance.loop.call_later(
+            DEBOUNCE_SECONDS,
+            schedule_notification
+        )
+
+        return jsonify({"status": "success"}), 200
+    except Exception as e:
+        logger.error(f"Error processing Sonarr webhook: {e}", exc_info=True)
+        return jsonify({"status": "error", "message": "Internal server error"}), 500
+
+# --- Web UI API Endpoints ---
+
+@app.route('/api/status', methods=['GET'])
+def api_status():
+    """Returns the current status of the system."""
+    bot_instance = app.config.get('discord_bot')
+    if not bot_instance:
+        return jsonify({"error": "Bot instance not available"}), 500
+    
+    config = bot_instance.config
+    
+    # Get Plex status
+    plex_status = {
+        "connected": False,
+        "name": None,
+        "scan_enabled": config.plex.scan_on_notification and config.plex.enabled,
+        "library_name": config.plex.library_name,
+        "libraries": []
+    }
+    
+    try:
+        from plex_utils import get_plex_client
+        plex = get_plex_client()
+        if plex:
+            plex_status["connected"] = True
+            plex_status["name"] = plex.friendlyName
+            # Get library list
+            sections = plex.library.sections()
+            plex_status["libraries"] = [{"key": s.key, "title": s.title, "type": s.type} for s in sections]
+    except Exception as e:
+        logger.error(f"Error getting Plex status: {e}")
+    
+    # Get Discord status
+    discord_status = {
+        "connected": bot_instance.is_ready() if bot_instance else False,
+        "username": str(bot_instance.user) if bot_instance and bot_instance.user else None
+    }
+    
+    return jsonify({
+        "plex": plex_status,
+        "discord": discord_status
+    })
 
 
-async def start_overseerr_user_sync(bot_instance):
+@app.route('/api/notifications', methods=['GET'])
+def api_notifications():
+    """Returns recent notification history."""
+    # Filter notifications from last 24 hours
+    from datetime import timedelta
+    cutoff = datetime.now() - timedelta(hours=24)
+    
+    recent = [
+        notif for notif in NOTIFICATION_HISTORY
+        if datetime.fromisoformat(notif['timestamp']) > cutoff
+    ]
+    
+    # Sort by timestamp, newest first
+    recent.sort(key=lambda x: x['timestamp'], reverse=True)
+    
+    return jsonify({
+        "notifications": recent,
+        "total": len(recent)
+    })
+
+
+@app.route('/api/plex/scan', methods=['POST'])
+def api_plex_scan():
+    """Triggers a Plex library scan."""
+    try:
+        data = request.json or {}
+        library_name = data.get('library_name')
+        
+        bot_instance = app.config.get('discord_bot')
+        if not bot_instance:
+            return jsonify({"success": False, "message": "Bot instance not available"}), 500
+        
+        # Run scan in async context
+        loop = bot_instance.loop
+        if loop.is_running():
+            future = asyncio.run_coroutine_threadsafe(
+                scan_plex_library_async(library_name),
+                loop
+            )
+            result = future.result(timeout=10)
+        else:
+            result = asyncio.run(scan_plex_library_async(library_name))
+        
+        if result:
+            lib_text = library_name if library_name else "all libraries"
+            return jsonify({
+                "success": True,
+                "message": f"Successfully triggered Plex scan for {lib_text}"
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "message": "Failed to trigger Plex scan. Check logs for details."
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Error triggering Plex scan: {e}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "message": f"Error: {str(e)}"
+        }), 500
+
+# --- Service Setup ---
+
+
+async def start_overseerr_user_sync(bot_instance: discord.Client):
     """Periodically syncs users from Overseerr."""
+    config = bot_instance.config
     while True:
-        await fetch_overseerr_users()
-        interval = OVERSEERR_CONFIG.get("refresh_interval_minutes", 60)
-        logger.info(f"Next Overseerr user sync in {interval} minutes.")
-        await asyncio.sleep(interval * 60)
-
-# --- Flask Server Startup ---
+        global OVERSEERR_USERS_DATA
+        OVERSEERR_USERS_DATA = await fetch_overseerr_users()
+        await asyncio.sleep(config.overseerr.refresh_interval_minutes * 60)
 
 
-def run_webhook_server(bot_instance):
-    """Starts the Flask server in a separate thread/process."""
+# Serve static files from webui build
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def serve_webui(path):
+    """Serves the React web UI."""
+    webui_build_path = Path(__file__).parent / 'webui' / 'dist'
+    
+    if path and (webui_build_path / path).exists():
+        return send_from_directory(str(webui_build_path), path)
+    else:
+        # Serve index.html for all routes (React Router)
+        index_path = webui_build_path / 'index.html'
+        if index_path.exists():
+            return send_from_directory(str(webui_build_path), 'index.html')
+        else:
+            return jsonify({"error": "Web UI not built. Run 'npm run build' in the webui directory."}), 404
+
+
+def run_webhook_server(bot_instance: discord.Client):
+    """Starts the Flask server in a separate thread."""
     app.config['discord_bot'] = bot_instance
-
-    logger.info("Flask server attempting to start on host 0.0.0.0 port 5000...")
+    # Ensure Flask logs errors to stdout
+    app.logger.setLevel(logging.INFO)
     app.run(host='0.0.0.0', port=5000, debug=False)
-    logger.info("Flask server stopped.")
-
-# This function will be called by bot.py
 
 
-async def setup_media_watcher_service(bot_instance):
-    """Sets up the media watcher service, including webhook server and sync task."""
-    logger.info("Setting up Media Watcher Service...")
+async def setup_media_watcher_service(bot_instance: discord.Client):
+    """Initializes the media watcher service."""
+    config = bot_instance.config
+    if not config.discord.sonarr_notification_channel_id:
+        logger.warning(
+            "Sonarr notification channel not set. Sonarr notifications will be disabled.")
+    if not config.discord.radarr_notification_channel_id:
+        logger.warning(
+            "Radarr notification channel not set. Radarr notifications will be disabled.")
 
-    # Initial sync of Overseerr users
-    await fetch_overseerr_users()
+    if config.overseerr.enabled:
+        logger.info("Overseerr integration is enabled. Starting user sync.")
+        bot_instance.loop.create_task(start_overseerr_user_sync(bot_instance))
+    else:
+        logger.info("Overseerr integration is disabled.")
 
-    # Start the periodic Overseerr user sync task in the bot's event loop
-    bot_instance.loop.create_task(start_overseerr_user_sync(bot_instance))
-
-    # Start the Flask webhook server in a separate thread
-    # This is crucial so it doesn't block the bot's asyncio loop
     import threading
-    flask_thread = threading.Thread(
-        target=run_webhook_server, args=(bot_instance,), daemon=True)
-    flask_thread.start()
+    threading.Thread(target=run_webhook_server, args=(
+        bot_instance,), daemon=True).start()
     logger.info(
-        "Flask webhook server started in a separate daemon thread on port 5000.")
+        "Flask webhook server started in a background thread on port 5000.")
