@@ -77,7 +77,7 @@ class PlexBot(commands.Bot):
     async def setup_hook(self) -> None:
         # Load cogs
         for filename in os.listdir('./cogs'):
-            if filename.endswith('.py'):
+            if filename.endswith('.py') and filename != '__init__.py':
                 await self.load_extension(f'cogs.{filename[:-3]}')
                 logging.info(f"Loaded cog: {filename}")
 
