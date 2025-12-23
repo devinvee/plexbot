@@ -19,7 +19,7 @@ services:
 
     plexbot:
         network_mode: service:ts-plexbot
-        image: ghcr.io/devinvee/plexbot:latest
+        image: ghcr.io/devinvee/plexbot:dev  # Use :latest for production, :dev for development
         container_name: plexbot
         env_file:
             - .env

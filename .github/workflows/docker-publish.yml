@@ -4,6 +4,7 @@ on:
     push:
         branches:
             - main
+            - dev
 
 env:
     REGISTRY: ghcr.io
@@ -30,6 +31,15 @@ jobs:
                   username: ${{ github.actor }}
                   password: ${{ secrets.GITHUB_TOKEN }}
 
+            - name: Set image tag
+              id: image_tag
+              run: |
+                  if [ "${{ github.ref_name }}" == "main" ]; then
+                      echo "tag=latest" >> $GITHUB_OUTPUT
+                  else
+                      echo "tag=dev" >> $GITHUB_OUTPUT
+                  fi
+
             - name: Build and push Docker image
               uses: docker/build-push-action@v5
               with:
@@ -37,5 +47,5 @@ jobs:
                   file: ./Dockerfile
                   push: true
                   tags: |
-                      ${{ env.REGISTRY }}/${{ github.repository }}:latest
+                      ${{ env.REGISTRY }}/${{ github.repository }}:${{ steps.image_tag.outputs.tag }}
                       ${{ env.REGISTRY }}/${{ github.repository }}:${{ github.sha }}
