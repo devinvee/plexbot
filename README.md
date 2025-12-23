@@ -25,17 +25,8 @@ PlexBot is packed with features to streamline your media server management:
 
 #### 🔔 \*Arr Suite & Overseerr Integration
 
--   **Automated Notifications:** Receive webhook notifications from Sonarr, Radarr, and Readarr to report on new media with rich embeds.
--   **Batched Notifications:** Episodes are automatically batched (60-second debounce) to avoid spam when multiple episodes are imported.
--   **Automatic Plex Scanning:** Plex libraries are automatically scanned when batched notifications are sent (replacing per-episode autoscan).
+-   **Automated Notifications:** (Implicit) The bot is structured to receive webhook notifications from Sonarr, Radarr, and Overseerr to report on new media, requests, and other events.
 -   **Multi-Instance Support:** Configure multiple Sonarr instances (e.g., for 4K content or anime) in the `config.json` file.
-
-#### 🌐 Web Dashboard
-
--   **Modern Web UI:** Beautiful, modal-based React interface for managing your PlexBot instance.
--   **System Status:** Real-time monitoring of Plex connection, Discord bot status, and notification history.
--   **Manual Controls:** Trigger Plex library scans manually from the web interface.
--   **Notification History:** View recent notifications from the last 24 hours.
 
 #### 👤 User Management
 
@@ -102,22 +93,6 @@ cp config.json.sample config.json
 
 Edit `config.json` to configure the bot's features, like enabling/disabling modules, setting up Sonarr instances, and mapping users.
 
-**C. Build Web UI (Optional)**
-
-If you want to use the web dashboard, build the React frontend:
-
-```bash
-./build_webui.sh
-```
-
-Or manually:
-
-```bash
-cd webui
-npm install
-npm run build
-```
-
 ### 5. Running the Bot
 
 Once configured, you can start the bot with:
@@ -139,15 +114,6 @@ Here are some of the primary commands you can use with PlexBot:
 -   `/restartcontainers` - Restarts the entire container stack defined in your environment file.
 -   `/realdebrid` - Fetches and displays your Real-Debrid account status.
 -   `/plexaccess` - Allows users to self-select the Plex libraries they're interested in.
-
-### Web Dashboard
-
-Once the bot is running, access the web dashboard at `http://localhost:5000` (or your server's IP address). The dashboard provides:
-
--   Real-time system status monitoring
--   Recent notification history
--   Manual Plex library scanning
--   Configuration overview
 
 ---
 

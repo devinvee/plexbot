@@ -5,8 +5,7 @@ import asyncio
 import logging
 from collections import deque, defaultdict
 from datetime import datetime
-from flask import Flask, request, jsonify, send_from_directory
-from pathlib import Path
+from flask import Flask, request, jsonify
 from typing import Dict, Any, Set, Deque
 import discord
 
@@ -16,7 +15,6 @@ from media_watcher_utils import (
     get_discord_user_ids_for_tags,
     fetch_overseerr_users,
 )
-from plex_utils import scan_plex_library_async
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +24,6 @@ SERIES_NOTIFICATION_TIMERS: Dict[str, asyncio.TimerHandle] = {}
 NOTIFIED_EPISODES_CACHE: Deque[tuple] = deque(maxlen=1000)
 NOTIFIED_MOVIES_CACHE: Deque[tuple] = deque(maxlen=1000)
 OVERSEERR_USERS_DATA: Dict[str, dict] = {}
-NOTIFICATION_HISTORY: Deque[Dict[str, Any]] = deque(maxlen=100)  # Store last 100 notifications
 
 DEBOUNCE_SECONDS = 60
 
@@ -191,26 +188,6 @@ async def _process_and_send_buffered_notifications(series_id: str, bot_instance:
             channel_id=channel_id,
             embed=embed,
         )
-        
-        # Record notification in history
-        NOTIFICATION_HISTORY.append({
-            'type': 'sonarr',
-            'title': series_data.get('title', 'Unknown Series'),
-            'episode': {
-                'season': season_num,
-                'number': episode_num,
-                'title': episode_title
-            },
-            'quality': quality_string,
-            'timestamp': datetime.now().isoformat(),
-            'episode_count': ep_count
-        })
-        
-        # Trigger Plex scan if enabled
-        if bot_instance.config.plex.scan_on_notification and bot_instance.config.plex.enabled:
-            logger.info("Triggering Plex library scan after Sonarr notification")
-            library_name = bot_instance.config.plex.library_name if bot_instance.config.plex.library_name else None
-            await scan_plex_library_async(library_name)
     except Exception as e:
         logger.critical(
             f"CRITICAL ERROR in _process_and_send_buffered_notifications: {e}", exc_info=True)
@@ -363,22 +340,6 @@ async def radarr_webhook_detailed():
         )
         # Schedule it safely
         asyncio.run_coroutine_threadsafe(coro, bot_instance.loop)
-        
-        # Record notification in history
-        NOTIFICATION_HISTORY.append({
-            'type': 'radarr',
-            'title': title,
-            'year': year,
-            'quality': quality,
-            'timestamp': datetime.now().isoformat()
-        })
-        
-        # Trigger Plex scan if enabled
-        if config.plex.scan_on_notification and config.plex.enabled:
-            logger.info("Triggering Plex library scan after Radarr notification")
-            library_name = config.plex.library_name if config.plex.library_name else None
-            scan_coro = scan_plex_library_async(library_name)
-            asyncio.run_coroutine_threadsafe(scan_coro, bot_instance.loop)
 
         return jsonify({"status": "success"}), 200
     except Exception as e:
@@ -494,112 +455,6 @@ async def sonarr_webhook():
         logger.error(f"Error processing Sonarr webhook: {e}", exc_info=True)
         return jsonify({"status": "error", "message": "Internal server error"}), 500
 
-# --- Web UI API Endpoints ---
-
-@app.route('/api/status', methods=['GET'])
-def api_status():
-    """Returns the current status of the system."""
-    bot_instance = app.config.get('discord_bot')
-    if not bot_instance:
-        return jsonify({"error": "Bot instance not available"}), 500
-    
-    config = bot_instance.config
-    
-    # Get Plex status
-    plex_status = {
-        "connected": False,
-        "name": None,
-        "scan_enabled": config.plex.scan_on_notification and config.plex.enabled,
-        "library_name": config.plex.library_name,
-        "libraries": []
-    }
-    
-    try:
-        from plex_utils import get_plex_client
-        plex = get_plex_client()
-        if plex:
-            plex_status["connected"] = True
-            plex_status["name"] = plex.friendlyName
-            # Get library list
-            sections = plex.library.sections()
-            plex_status["libraries"] = [{"key": s.key, "title": s.title, "type": s.type} for s in sections]
-    except Exception as e:
-        logger.error(f"Error getting Plex status: {e}")
-    
-    # Get Discord status
-    discord_status = {
-        "connected": bot_instance.is_ready() if bot_instance else False,
-        "username": str(bot_instance.user) if bot_instance and bot_instance.user else None
-    }
-    
-    return jsonify({
-        "plex": plex_status,
-        "discord": discord_status
-    })
-
-
-@app.route('/api/notifications', methods=['GET'])
-def api_notifications():
-    """Returns recent notification history."""
-    # Filter notifications from last 24 hours
-    from datetime import timedelta
-    cutoff = datetime.now() - timedelta(hours=24)
-    
-    recent = [
-        notif for notif in NOTIFICATION_HISTORY
-        if datetime.fromisoformat(notif['timestamp']) > cutoff
-    ]
-    
-    # Sort by timestamp, newest first
-    recent.sort(key=lambda x: x['timestamp'], reverse=True)
-    
-    return jsonify({
-        "notifications": recent,
-        "total": len(recent)
-    })
-
-
-@app.route('/api/plex/scan', methods=['POST'])
-def api_plex_scan():
-    """Triggers a Plex library scan."""
-    try:
-        data = request.json or {}
-        library_name = data.get('library_name')
-        
-        bot_instance = app.config.get('discord_bot')
-        if not bot_instance:
-            return jsonify({"success": False, "message": "Bot instance not available"}), 500
-        
-        # Run scan in async context
-        loop = bot_instance.loop
-        if loop.is_running():
-            future = asyncio.run_coroutine_threadsafe(
-                scan_plex_library_async(library_name),
-                loop
-            )
-            result = future.result(timeout=10)
-        else:
-            result = asyncio.run(scan_plex_library_async(library_name))
-        
-        if result:
-            lib_text = library_name if library_name else "all libraries"
-            return jsonify({
-                "success": True,
-                "message": f"Successfully triggered Plex scan for {lib_text}"
-            })
-        else:
-            return jsonify({
-                "success": False,
-                "message": "Failed to trigger Plex scan. Check logs for details."
-            }), 500
-            
-    except Exception as e:
-        logger.error(f"Error triggering Plex scan: {e}", exc_info=True)
-        return jsonify({
-            "success": False,
-            "message": f"Error: {str(e)}"
-        }), 500
-
 # --- Service Setup ---
 
 
@@ -610,24 +465,6 @@ async def start_overseerr_user_sync(bot_instance: discord.Client):
         global OVERSEERR_USERS_DATA
         OVERSEERR_USERS_DATA = await fetch_overseerr_users()
         await asyncio.sleep(config.overseerr.refresh_interval_minutes * 60)
-
-
-# Serve static files from webui build
-@app.route('/', defaults={'path': ''})
-@app.route('/<path:path>')
-def serve_webui(path):
-    """Serves the React web UI."""
-    webui_build_path = Path(__file__).parent / 'webui' / 'dist'
-    
-    if path and (webui_build_path / path).exists():
-        return send_from_directory(str(webui_build_path), path)
-    else:
-        # Serve index.html for all routes (React Router)
-        index_path = webui_build_path / 'index.html'
-        if index_path.exists():
-            return send_from_directory(str(webui_build_path), 'index.html')
-        else:
-            return jsonify({"error": "Web UI not built. Run 'npm run build' in the webui directory."}), 404
 
 
 def run_webhook_server(bot_instance: discord.Client):
