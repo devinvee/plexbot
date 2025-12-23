@@ -563,6 +563,69 @@ def api_notifications():
     })
 
 
+@app.route('/api/settings', methods=['GET'])
+def api_get_settings():
+    """Returns current settings."""
+    bot_instance = app.config.get('discord_bot')
+    if not bot_instance:
+        return jsonify({"error": "Bot instance not available"}), 500
+    
+    config = bot_instance.config
+    
+    return jsonify({
+        "plex": {
+            "enabled": config.plex.enabled,
+            "scan_on_notification": config.plex.scan_on_notification,
+            "library_name": config.plex.library_name
+        },
+        "debounce_seconds": DEBOUNCE_SECONDS
+    })
+
+
+@app.route('/api/settings', methods=['PUT'])
+def api_update_settings():
+    """Updates settings."""
+    bot_instance = app.config.get('discord_bot')
+    if not bot_instance:
+        return jsonify({"error": "Bot instance not available"}), 500
+    
+    try:
+        data = request.json
+        config = bot_instance.config
+        
+        # Update Plex settings
+        if 'plex' in data:
+            plex_data = data['plex']
+            if 'enabled' in plex_data:
+                config.plex.enabled = bool(plex_data['enabled'])
+            if 'scan_on_notification' in plex_data:
+                config.plex.scan_on_notification = bool(plex_data['scan_on_notification'])
+            if 'library_name' in plex_data:
+                # Allow null/empty string to mean "all libraries"
+                library_name = plex_data['library_name']
+                config.plex.library_name = library_name if library_name else None
+        
+        # Note: debounce_seconds is a global constant, would need more work to make it dynamic
+        # For now, we'll just return success
+        
+        logger.info(f"Settings updated: {data}")
+        return jsonify({
+            "success": True,
+            "message": "Settings updated successfully",
+            "settings": {
+                "plex": {
+                    "enabled": config.plex.enabled,
+                    "scan_on_notification": config.plex.scan_on_notification,
+                    "library_name": config.plex.library_name
+                },
+                "debounce_seconds": DEBOUNCE_SECONDS
+            }
+        })
+    except Exception as e:
+        logger.error(f"Error updating settings: {e}", exc_info=True)
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
 @app.route('/api/plex/scan', methods=['POST'])
 def api_plex_scan():
     """Triggers a Plex library scan."""

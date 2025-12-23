@@ -29,6 +29,9 @@ function App() {
 	const [showScanModal, setShowScanModal] = useState(false);
 	const [scanning, setScanning] = useState(false);
 	const [scanResult, setScanResult] = useState(null);
+	const [settings, setSettings] = useState(null);
+	const [savingSettings, setSavingSettings] = useState(false);
+	const [settingsResult, setSettingsResult] = useState(null);
 
 	useEffect(() => {
 		fetchStatus();
@@ -59,6 +62,42 @@ function App() {
 			setNotifications(data.notifications || []);
 		} catch (error) {
 			console.error('Failed to fetch notifications:', error);
+		}
+	};
+
+	const fetchSettings = async () => {
+		try {
+			const response = await fetch(`${API_BASE}/settings`);
+			const data = await response.json();
+			setSettings(data);
+		} catch (error) {
+			console.error('Failed to fetch settings:', error);
+		}
+	};
+
+	const saveSettings = async () => {
+		setSavingSettings(true);
+		setSettingsResult(null);
+		try {
+			const response = await fetch(`${API_BASE}/settings`, {
+				method: 'PUT',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(settings),
+			});
+			const data = await response.json();
+			setSettingsResult(data);
+			if (data.success) {
+				// Refresh status to show updated settings
+				fetchStatus();
+				setTimeout(() => setShowSettings(false), 1500);
+			}
+		} catch (error) {
+			setSettingsResult({
+				success: false,
+				message: 'Failed to save settings',
+			});
+		} finally {
+			setSavingSettings(false);
 		}
 	};
 
@@ -107,7 +146,10 @@ function App() {
 					</button>
 					<button
 						className="btn btn-secondary"
-						onClick={() => setShowSettings(true)}
+						onClick={() => {
+							fetchSettings();
+							setShowSettings(true);
+						}}
 					>
 						Settings
 					</button>
@@ -286,38 +328,141 @@ function App() {
 
 			<Modal
 				isOpen={showSettings}
-				onClose={() => setShowSettings(false)}
+				onClose={() => {
+					setShowSettings(false);
+					setSettingsResult(null);
+				}}
 				title="Settings"
 			>
 				<div className="settings-modal">
-					<div className="setting-item">
-						<label>Plex Auto-Scan</label>
-						<div className="setting-value">
-							{status?.plex?.scan_enabled
-								? 'Enabled'
-								: 'Disabled'}
-						</div>
-						<p className="setting-description">
-							Automatically scan Plex libraries when notifications
-							are received
-						</p>
-					</div>
-					{status?.plex?.library_name && (
-						<div className="setting-item">
-							<label>Target Library</label>
-							<div className="setting-value">
-								{status.plex.library_name || 'All Libraries'}
+					{settings && (
+						<>
+							<div className="setting-item">
+								<label>Plex Integration</label>
+								<div className="setting-control">
+									<label className="toggle-switch">
+										<input
+											type="checkbox"
+											checked={settings.plex?.enabled ?? true}
+											onChange={(e) =>
+												setSettings({
+													...settings,
+													plex: {
+														...settings.plex,
+														enabled: e.target.checked,
+													},
+												})
+											}
+										/>
+										<span className="toggle-slider"></span>
+									</label>
+									<span className="toggle-label">
+										{settings.plex?.enabled ? 'Enabled' : 'Disabled'}
+									</span>
+								</div>
+								<p className="setting-description">
+									Enable Plex integration features
+								</p>
 							</div>
-						</div>
+
+							<div className="setting-item">
+								<label>Plex Auto-Scan</label>
+								<div className="setting-control">
+									<label className="toggle-switch">
+										<input
+											type="checkbox"
+											checked={settings.plex?.scan_on_notification ?? true}
+											onChange={(e) =>
+												setSettings({
+													...settings,
+													plex: {
+														...settings.plex,
+														scan_on_notification: e.target.checked,
+													},
+												})
+											}
+											disabled={!settings.plex?.enabled}
+										/>
+										<span className="toggle-slider"></span>
+									</label>
+									<span className="toggle-label">
+										{settings.plex?.scan_on_notification
+											? 'Enabled'
+											: 'Disabled'}
+									</span>
+								</div>
+								<p className="setting-description">
+									Automatically scan Plex libraries when notifications
+									are received
+								</p>
+							</div>
+
+							<div className="setting-item">
+								<label>Target Library</label>
+								<div className="setting-control">
+									<select
+										value={settings.plex?.library_name || ''}
+										onChange={(e) =>
+											setSettings({
+												...settings,
+												plex: {
+													...settings.plex,
+													library_name:
+														e.target.value || null,
+												},
+											})
+										}
+										disabled={!settings.plex?.enabled}
+									>
+										<option value="">All Libraries</option>
+										{status?.plex?.libraries?.map((lib) => (
+											<option key={lib.key} value={lib.title}>
+												{lib.title}
+											</option>
+										))}
+									</select>
+								</div>
+								<p className="setting-description">
+									Select a specific library to scan, or leave as "All
+									Libraries" to scan all
+								</p>
+							</div>
+
+							<div className="setting-item">
+								<label>Notification Debounce</label>
+								<div className="setting-value">
+									{settings.debounce_seconds || 60} seconds
+								</div>
+								<p className="setting-description">
+									Episodes are batched for this duration before sending
+									notifications (read-only)
+								</p>
+							</div>
+
+							{settingsResult && (
+								<div
+									className={`settings-result ${
+										settingsResult.success ? 'success' : 'error'
+									}`}
+								>
+									{settingsResult.message}
+								</div>
+							)}
+
+							<div className="settings-actions">
+								<button
+									className="btn btn-primary"
+									onClick={saveSettings}
+									disabled={savingSettings}
+								>
+									{savingSettings ? 'Saving...' : 'Save Settings'}
+								</button>
+							</div>
+						</>
 					)}
-					<div className="setting-item">
-						<label>Notification Debounce</label>
-						<div className="setting-value">60 seconds</div>
-						<p className="setting-description">
-							Episodes are batched for this duration before
-							sending notifications
-						</p>
-					</div>
+					{!settings && (
+						<div className="loading">Loading settings...</div>
+					)}
 				</div>
 			</Modal>
 		</div>
