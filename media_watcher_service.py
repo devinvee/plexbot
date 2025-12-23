@@ -565,19 +565,23 @@ def api_notifications():
 
 @app.route('/api/config', methods=['GET'])
 def api_get_config():
-    """Returns the full configuration."""
+    """Returns the full configuration with processed values."""
     try:
         import json
-        from utils import load_config
+        from utils import _replace_placeholders
         CONFIG_FILE = "config.json"
         
         # Load raw config (with placeholders)
         with open(CONFIG_FILE, 'r') as f:
             raw_config = json.load(f)
         
+        # Process placeholders to show actual values
+        processed_config = _replace_placeholders(raw_config)
+        
         return jsonify({
             "success": True,
-            "config": raw_config
+            "config": processed_config,
+            "raw_config": raw_config  # Keep raw for reference
         })
     except Exception as e:
         logger.error(f"Error loading config: {e}", exc_info=True)
