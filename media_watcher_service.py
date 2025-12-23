@@ -100,6 +100,7 @@ async def _process_and_send_buffered_notifications(series_id: str, bot_instance:
         series_data = latest_item.get('series_data_ref', {})
         episode_data = latest_item.get('episode_data', {})
         quality_string = latest_item.get('quality', 'N/A')
+        series_path = series_data.get('path')  # Extract series path for Plex scanning
 
         # --- Build Rich Embed (Sonarr) ---
         embed = discord.Embed(color=0x00A4DC)  # Sonarr Blue
@@ -209,8 +210,9 @@ async def _process_and_send_buffered_notifications(series_id: str, bot_instance:
         # Trigger Plex scan if enabled
         if bot_instance.config.plex.scan_on_notification and bot_instance.config.plex.enabled:
             logger.info("Triggering Plex library scan after Sonarr notification")
+            # Use series path to find and scan only the relevant library
             library_name = bot_instance.config.plex.library_name if bot_instance.config.plex.library_name else None
-            await scan_plex_library_async(library_name)
+            await scan_plex_library_async(library_name, series_path)
     except Exception as e:
         logger.critical(
             f"CRITICAL ERROR in _process_and_send_buffered_notifications: {e}", exc_info=True)
@@ -280,6 +282,7 @@ async def radarr_webhook_detailed():
         movie_data = payload.get('movie', {})
         movie_file_data = payload.get('movieFile', {})
         remote_movie_data = payload.get('remoteMovie', {})
+        movie_path = movie_data.get('path')  # Extract movie path for Plex scanning
 
         # Deduplication
         unique_key = (movie_data.get('tmdbId'), movie_file_data.get(
@@ -376,8 +379,9 @@ async def radarr_webhook_detailed():
         # Trigger Plex scan if enabled
         if config.plex.scan_on_notification and config.plex.enabled:
             logger.info("Triggering Plex library scan after Radarr notification")
+            # Use movie path to find and scan only the relevant library
             library_name = config.plex.library_name if config.plex.library_name else None
-            scan_coro = scan_plex_library_async(library_name)
+            scan_coro = scan_plex_library_async(library_name, movie_path)
             asyncio.run_coroutine_threadsafe(scan_coro, bot_instance.loop)
 
         return jsonify({"status": "success"}), 200
