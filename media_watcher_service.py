@@ -580,8 +580,7 @@ def api_get_config():
         
         return jsonify({
             "success": True,
-            "config": processed_config,
-            "raw_config": raw_config  # Keep raw for reference
+            "config": processed_config
         })
     except Exception as e:
         logger.error(f"Error loading config: {e}", exc_info=True)
