@@ -870,16 +870,22 @@ def api_plex_library_items(library_key):
     """Gets items (shows/movies) from a specific library."""
     try:
         limit = request.args.get('limit', 1000, type=int)
+        logger.info(
+            f"Fetching items for library key: {library_key}, limit: {limit}")
         items = get_library_items(library_key, limit=limit)
+        logger.info(
+            f"Returning {len(items)} items for library key: {library_key}")
         return jsonify({
             "success": True,
-            "items": items
+            "items": items,
+            "count": len(items)
         })
     except Exception as e:
         logger.error(f"Error getting library items: {e}", exc_info=True)
         return jsonify({
             "success": False,
-            "message": f"Error: {str(e)}"
+            "message": f"Error: {str(e)}",
+            "items": []
         }), 500
 
 

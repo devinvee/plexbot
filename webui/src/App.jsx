@@ -88,14 +88,23 @@ function App() {
 
 	const fetchLibraryItems = async (libraryKey) => {
 		setLoadingItems(true);
+		setLibraryItems([]);
 		try {
 			const response = await fetch(`${API_BASE}/plex/library/${libraryKey}/items`);
 			const data = await response.json();
+			console.log('Library items response:', data);
 			if (data.success) {
 				setLibraryItems(data.items || []);
+				if (!data.items || data.items.length === 0) {
+					console.warn(`No items found for library key: ${libraryKey}`);
+				}
+			} else {
+				console.error('Failed to fetch library items:', data.message);
+				alert(`Error loading items: ${data.message || 'Unknown error'}`);
 			}
 		} catch (error) {
 			console.error('Failed to fetch library items:', error);
+			alert(`Error loading items: ${error.message}`);
 		} finally {
 			setLoadingItems(false);
 		}

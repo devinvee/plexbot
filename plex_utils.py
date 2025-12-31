@@ -326,35 +326,86 @@ def get_library_items(library_key: str, limit: int = 1000) -> list:
     """
     plex = get_plex_client()
     if not plex:
+        logger.error("Cannot get library items: Plex client not available")
         return []
     
     try:
-        section = plex.library.sectionByID(library_key)
+        # Try to get section by ID (convert to int if needed)
+        try:
+            section_id = int(library_key)
+            section = plex.library.sectionByID(section_id)
+        except (ValueError, TypeError):
+            # If conversion fails, try to find by title
+            logger.warning(f"Could not convert library_key to int: {library_key}, trying to find by title")
+            sections = plex.library.sections()
+            section = None
+            for s in sections:
+                if str(s.key) == str(library_key) or s.title == library_key:
+                    section = s
+                    break
+        
         if not section:
+            logger.error(f"Could not find library section with key: {library_key}")
             return []
+        
+        logger.info(f"Found library section: {section.title} (type: {section.type})")
         
         plex_url = os.getenv("PLEX_URL")
         plex_token = os.getenv("PLEX_TOKEN")
         
-        items = section.all(limit=limit)
+        # Get items based on library type
+        items = []
+        try:
+            # Try section.all() first - this should work for most library types
+            if hasattr(section, 'all'):
+                items = list(section.all(limit=limit))
+                logger.info(f"Using section.all() - found {len(items)} items")
+            elif hasattr(section, 'search'):
+                # Fallback to search if all() doesn't exist
+                items = list(section.search())
+                logger.info(f"Using section.search() - found {len(items)} items")
+            else:
+                logger.error(f"Section {section.title} has no 'all' or 'search' method")
+                return []
+        except Exception as e:
+            logger.error(f"Error getting items from section: {e}", exc_info=True)
+            # Try alternative method
+            try:
+                if hasattr(section, 'search'):
+                    items = list(section.search())
+                    logger.info(f"Fallback: Using section.search() - found {len(items)} items")
+                else:
+                    logger.error("No alternative method available")
+                    return []
+            except Exception as e2:
+                logger.error(f"Error with section.search(): {e2}", exc_info=True)
+                return []
+        
+        logger.info(f"Found {len(items)} items in library {section.title}")
+        
         result = []
         for item in items:
-            thumb = None
-            if hasattr(item, 'thumb') and item.thumb:
-                # Build proper Plex thumbnail URL
-                if plex_url and plex_token:
-                    thumb = f"{plex_url}{item.thumb}?X-Plex-Token={plex_token}"
-                else:
-                    thumb = item.thumb
-            
-            result.append({
-                "key": item.key,
-                "title": item.title,
-                "year": getattr(item, 'year', None),
-                "type": section.type,
-                "thumb": thumb
-            })
+            try:
+                thumb = None
+                if hasattr(item, 'thumb') and item.thumb:
+                    # Build proper Plex thumbnail URL
+                    if plex_url and plex_token:
+                        thumb = f"{plex_url}{item.thumb}?X-Plex-Token={plex_token}"
+                    else:
+                        thumb = item.thumb
+                
+                result.append({
+                    "key": item.key,
+                    "title": item.title,
+                    "year": getattr(item, 'year', None),
+                    "type": section.type,
+                    "thumb": thumb
+                })
+            except Exception as e:
+                logger.warning(f"Error processing item: {e}")
+                continue
         
+        logger.info(f"Returning {len(result)} items")
         return result
     except Exception as e:
         logger.error(f"Error getting library items: {e}", exc_info=True)
