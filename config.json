@@ -45,5 +45,10 @@
 	"tmdb": {
 		"api_key": "${TMDB_API_KEY}"
 	},
+	"plex": {
+		"enabled": true,
+		"scan_on_notification": true,
+		"library_name": null
+	},
 	"log_level": "${LOG_LEVEL}"
 }

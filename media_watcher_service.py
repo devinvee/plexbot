@@ -26,7 +26,8 @@ SERIES_NOTIFICATION_TIMERS: Dict[str, asyncio.TimerHandle] = {}
 NOTIFIED_EPISODES_CACHE: Deque[tuple] = deque(maxlen=1000)
 NOTIFIED_MOVIES_CACHE: Deque[tuple] = deque(maxlen=1000)
 OVERSEERR_USERS_DATA: Dict[str, dict] = {}
-NOTIFICATION_HISTORY: Deque[Dict[str, Any]] = deque(maxlen=100)  # Store last 100 notifications
+NOTIFICATION_HISTORY: Deque[Dict[str, Any]] = deque(
+    maxlen=100)  # Store last 100 notifications
 
 DEBOUNCE_SECONDS = 60
 
@@ -95,31 +96,68 @@ async def _process_and_send_buffered_notifications(series_id: str, bot_instance:
         for item in buffered_items:
             NOTIFIED_EPISODES_CACHE.append(item.get("episode_unique_id", ""))
 
-        # Use the first item for series metadata
-        latest_item = buffered_items[-1]
+        # Sort episodes by season and episode number
+        sorted_items = sorted(
+            buffered_items,
+            key=lambda x: (
+                x.get('episode_data', {}).get('seasonNumber', 0),
+                x.get('episode_data', {}).get('episodeNumber', 0)
+            )
+        )
+
+        # Use the latest item for series metadata
+        latest_item = sorted_items[-1]
         series_data = latest_item.get('series_data_ref', {})
         episode_data = latest_item.get('episode_data', {})
         quality_string = latest_item.get('quality', 'N/A')
-        series_path = series_data.get('path')  # Extract series path for Plex scanning
+        # Extract series path for Plex scanning
+        series_path = series_data.get('path')
 
         # --- Build Rich Embed (Sonarr) ---
         embed = discord.Embed(color=0x00A4DC)  # Sonarr Blue
         embed.set_author(name="New Episode Available - Sonarr",
                          icon_url="https://i.imgur.com/tV61XQZ.png")
 
-        # Title
-        season_num = episode_data.get('seasonNumber', 0)
-        episode_num = episode_data.get('episodeNumber', 0)
-        ep_string = f"S{season_num:02d}E{episode_num:02d}"
+        # Build episode list
+        episode_list = []
+        for item in sorted_items:
+            ep_data = item.get('episode_data', {})
+            season_num = ep_data.get('seasonNumber', 0)
+            episode_num = ep_data.get('episodeNumber', 0)
+            ep_title = ep_data.get('title', 'Unknown Title')
+            ep_string = f"S{season_num:02d}E{episode_num:02d}"
+            episode_list.append(f"{ep_string} - {ep_title}")
 
-        embed.title = f"{series_data.get('title', 'Unknown Series')} ({series_data.get('year', 'N/A')}) ({ep_string})"
+        # Title - show range if multiple episodes, single if one
+        ep_count = len(sorted_items)
+        if ep_count == 1:
+            season_num = episode_data.get('seasonNumber', 0)
+            episode_num = episode_data.get('episodeNumber', 0)
+            ep_string = f"S{season_num:02d}E{episode_num:02d}"
+            embed.title = f"{series_data.get('title', 'Unknown Series')} ({series_data.get('year', 'N/A')}) ({ep_string})"
+        else:
+            first_ep = sorted_items[0].get('episode_data', {})
+            last_ep = sorted_items[-1].get('episode_data', {})
+            first_season = first_ep.get('seasonNumber', 0)
+            first_ep_num = first_ep.get('episodeNumber', 0)
+            last_season = last_ep.get('seasonNumber', 0)
+            last_ep_num = last_ep.get('episodeNumber', 0)
+            first_string = f"S{first_season:02d}E{first_ep_num:02d}"
+            last_string = f"S{last_season:02d}E{last_ep_num:02d}"
+            embed.title = f"{series_data.get('title', 'Unknown Series')} ({series_data.get('year', 'N/A')}) ({first_string} - {last_string})"
 
-        # Episode Info
-        episode_title = episode_data.get('title', 'Unknown Title')
+        # List all episodes
+        episodes_text = "\n".join(episode_list)
+        if len(episodes_text) > 1024:
+            # Discord field limit is 1024 characters, truncate if needed
+            episodes_text = episodes_text[:1021] + "..."
         embed.add_field(
-            name=f"Latest: {episode_title}", value=ep_string, inline=False)
+            name=f"Imported Episodes ({ep_count})",
+            value=episodes_text,
+            inline=False
+        )
 
-        # Overview
+        # Overview (from latest episode)
         overview = episode_data.get('overview', '')
         if overview:
             if len(overview) > 1000:
@@ -133,7 +171,6 @@ async def _process_and_send_buffered_notifications(series_id: str, bot_instance:
         embed.add_field(name="Quality", value=quality_string, inline=True)
 
         # Footer
-        ep_count = len(buffered_items)
         timestamp_str = datetime.now().strftime("%H:%M")
         embed.set_footer(
             text=f"{ep_count} episode(s) in this batch notification. • Today at {timestamp_str}")
@@ -178,7 +215,13 @@ async def _process_and_send_buffered_notifications(series_id: str, bot_instance:
             ping_string = " ".join([f"<@{uid}>" for uid in users_to_ping])
 
             title = series_data.get('title', 'Unknown Series')
-            mentions_text = f"Episode **{ep_string}** of **{title}** is now available! {ping_string}"
+            if ep_count == 1:
+                season_num = episode_data.get('seasonNumber', 0)
+                episode_num = episode_data.get('episodeNumber', 0)
+                ep_string = f"S{season_num:02d}E{episode_num:02d}"
+                mentions_text = f"Episode **{ep_string}** of **{title}** is now available! {ping_string}"
+            else:
+                mentions_text = f"**{ep_count} episodes** of **{title}** are now available! {ping_string}"
             logger.info(
                 f"Sonarr Notification: Tagging users {users_to_ping} based on tags {user_tags}")
 
@@ -192,15 +235,18 @@ async def _process_and_send_buffered_notifications(series_id: str, bot_instance:
             channel_id=channel_id,
             embed=embed,
         )
-        
+
         # Record notification in history
+        latest_season_num = episode_data.get('seasonNumber', 0)
+        latest_episode_num = episode_data.get('episodeNumber', 0)
+        latest_episode_title = episode_data.get('title', 'Unknown Title')
         NOTIFICATION_HISTORY.append({
             'type': 'sonarr',
             'title': series_data.get('title', 'Unknown Series'),
             'episode': {
-                'season': season_num,
-                'number': episode_num,
-                'title': episode_title
+                'season': latest_season_num,
+                'number': latest_episode_num,
+                'title': latest_episode_title
             },
             'quality': quality_string,
             'timestamp': datetime.now().isoformat(),
@@ -208,10 +254,11 @@ async def _process_and_send_buffered_notifications(series_id: str, bot_instance:
             'poster_url': poster_url if poster_url and poster_url.startswith("http") else None,
             'fanart_url': fanart_url if fanart_url and fanart_url.startswith("http") else None
         })
-        
+
         # Trigger Plex scan if enabled
         if bot_instance.config.plex.scan_on_notification and bot_instance.config.plex.enabled:
-            logger.info("Triggering Plex library scan after Sonarr notification")
+            logger.info(
+                "Triggering Plex library scan after Sonarr notification")
             # Use series path to find and scan only the relevant library
             library_name = bot_instance.config.plex.library_name if bot_instance.config.plex.library_name else None
             await scan_plex_library_async(library_name, series_path)
@@ -284,7 +331,8 @@ async def radarr_webhook_detailed():
         movie_data = payload.get('movie', {})
         movie_file_data = payload.get('movieFile', {})
         remote_movie_data = payload.get('remoteMovie', {})
-        movie_path = movie_data.get('path')  # Extract movie path for Plex scanning
+        # Extract movie path for Plex scanning
+        movie_path = movie_data.get('path')
 
         # Deduplication
         unique_key = (movie_data.get('tmdbId'), movie_file_data.get(
@@ -368,7 +416,7 @@ async def radarr_webhook_detailed():
         )
         # Schedule it safely
         asyncio.run_coroutine_threadsafe(coro, bot_instance.loop)
-        
+
         # Record notification in history
         # Build image URLs from TMDB data
         poster_url = None
@@ -380,7 +428,7 @@ async def radarr_webhook_detailed():
                 poster_url = f"https://image.tmdb.org/t/p/w300{poster_path}"
             if backdrop_path:
                 backdrop_url = f"https://image.tmdb.org/t/p/w1280{backdrop_path}"
-        
+
         NOTIFICATION_HISTORY.append({
             'type': 'radarr',
             'title': title,
@@ -390,10 +438,11 @@ async def radarr_webhook_detailed():
             'poster_url': poster_url,
             'backdrop_url': backdrop_url
         })
-        
+
         # Trigger Plex scan if enabled
         if config.plex.scan_on_notification and config.plex.enabled:
-            logger.info("Triggering Plex library scan after Radarr notification")
+            logger.info(
+                "Triggering Plex library scan after Radarr notification")
             # Use movie path to find and scan only the relevant library
             library_name = config.plex.library_name if config.plex.library_name else None
             scan_coro = scan_plex_library_async(library_name, movie_path)
@@ -515,15 +564,16 @@ async def sonarr_webhook():
 
 # --- Web UI API Endpoints ---
 
+
 @app.route('/api/status', methods=['GET'])
 def api_status():
     """Returns the current status of the system."""
     bot_instance = app.config.get('discord_bot')
     if not bot_instance:
         return jsonify({"error": "Bot instance not available"}), 500
-    
+
     config = bot_instance.config
-    
+
     # Get Plex status
     plex_status = {
         "connected": False,
@@ -532,7 +582,7 @@ def api_status():
         "library_name": config.plex.library_name,
         "libraries": []
     }
-    
+
     try:
         from plex_utils import get_plex_client
         plex = get_plex_client()
@@ -541,16 +591,17 @@ def api_status():
             plex_status["name"] = plex.friendlyName
             # Get library list
             sections = plex.library.sections()
-            plex_status["libraries"] = [{"key": s.key, "title": s.title, "type": s.type} for s in sections]
+            plex_status["libraries"] = [
+                {"key": s.key, "title": s.title, "type": s.type} for s in sections]
     except Exception as e:
         logger.error(f"Error getting Plex status: {e}")
-    
+
     # Get Discord status
     discord_status = {
         "connected": bot_instance.is_ready() if bot_instance else False,
         "username": str(bot_instance.user) if bot_instance and bot_instance.user else None
     }
-    
+
     return jsonify({
         "plex": plex_status,
         "discord": discord_status
@@ -563,15 +614,15 @@ def api_notifications():
     # Filter notifications from last 24 hours
     from datetime import timedelta
     cutoff = datetime.now() - timedelta(hours=24)
-    
+
     recent = [
         notif for notif in NOTIFICATION_HISTORY
         if datetime.fromisoformat(notif['timestamp']) > cutoff
     ]
-    
+
     # Sort by timestamp, newest first
     recent.sort(key=lambda x: x['timestamp'], reverse=True)
-    
+
     return jsonify({
         "notifications": recent,
         "total": len(recent)
@@ -585,14 +636,14 @@ def api_get_config():
         import json
         from utils import _replace_placeholders
         CONFIG_FILE = "config.json"
-        
+
         # Load raw config (with placeholders)
         with open(CONFIG_FILE, 'r') as f:
             raw_config = json.load(f)
-        
+
         # Process placeholders to show actual values
         processed_config = _replace_placeholders(raw_config)
-        
+
         return jsonify({
             "success": True,
             "config": processed_config
@@ -608,30 +659,30 @@ def api_update_config():
     bot_instance = app.config.get('discord_bot')
     if not bot_instance:
         return jsonify({"error": "Bot instance not available"}), 500
-    
+
     try:
         import json
         from utils import load_config
         CONFIG_FILE = "config.json"
-        
+
         data = request.json
         if 'config' not in data:
             return jsonify({"success": False, "error": "Missing 'config' in request"}), 400
-        
+
         new_config = data['config']
-        
+
         # Save to file
         with open(CONFIG_FILE, 'w') as f:
             json.dump(new_config, f, indent=2)
-        
+
         logger.info("Config file updated, reloading configuration...")
-        
+
         # Reload config (this updates the in-memory config)
         processed_config = load_config(CONFIG_FILE)
-        
+
         # Update bot instance config reference (bot_config is updated by load_config)
         bot_instance.config = bot_config
-        
+
         return jsonify({
             "success": True,
             "message": "Configuration updated and reloaded successfully"
@@ -647,9 +698,9 @@ def api_get_settings():
     bot_instance = app.config.get('discord_bot')
     if not bot_instance:
         return jsonify({"error": "Bot instance not available"}), 500
-    
+
     config = bot_instance.config
-    
+
     return jsonify({
         "plex": {
             "enabled": config.plex.enabled,
@@ -666,26 +717,27 @@ def api_update_settings():
     bot_instance = app.config.get('discord_bot')
     if not bot_instance:
         return jsonify({"error": "Bot instance not available"}), 500
-    
+
     try:
         data = request.json
         config = bot_instance.config
-        
+
         # Update Plex settings
         if 'plex' in data:
             plex_data = data['plex']
             if 'enabled' in plex_data:
                 config.plex.enabled = bool(plex_data['enabled'])
             if 'scan_on_notification' in plex_data:
-                config.plex.scan_on_notification = bool(plex_data['scan_on_notification'])
+                config.plex.scan_on_notification = bool(
+                    plex_data['scan_on_notification'])
             if 'library_name' in plex_data:
                 # Allow null/empty string to mean "all libraries"
                 library_name = plex_data['library_name']
                 config.plex.library_name = library_name if library_name else None
-        
+
         # Note: debounce_seconds is a global constant, would need more work to make it dynamic
         # For now, we'll just return success
-        
+
         logger.info(f"Settings updated: {data}")
         return jsonify({
             "success": True,
@@ -710,11 +762,11 @@ def api_plex_scan():
     try:
         data = request.json or {}
         library_name = data.get('library_name')
-        
+
         bot_instance = app.config.get('discord_bot')
         if not bot_instance:
             return jsonify({"success": False, "message": "Bot instance not available"}), 500
-        
+
         # Run scan in async context
         loop = bot_instance.loop
         if loop.is_running():
@@ -725,7 +777,7 @@ def api_plex_scan():
             result = future.result(timeout=10)
         else:
             result = asyncio.run(scan_plex_library_async(library_name))
-        
+
         if result:
             lib_text = library_name if library_name else "all libraries"
             return jsonify({
@@ -737,7 +789,7 @@ def api_plex_scan():
                 "success": False,
                 "message": "Failed to trigger Plex scan. Check logs for details."
             }), 500
-            
+
     except Exception as e:
         logger.error(f"Error triggering Plex scan: {e}", exc_info=True)
         return jsonify({
@@ -763,7 +815,7 @@ async def start_overseerr_user_sync(bot_instance: discord.Client):
 def serve_webui(path):
     """Serves the React web UI."""
     webui_build_path = Path(__file__).parent / 'webui' / 'dist'
-    
+
     if path and (webui_build_path / path).exists():
         return send_from_directory(str(webui_build_path), path)
     else:
