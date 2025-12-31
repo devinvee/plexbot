@@ -75,7 +75,10 @@ function App() {
 			!notificationSearch ||
 			notif.title.toLowerCase().includes(notificationSearch.toLowerCase()) ||
 			(notif.episode?.title &&
-				notif.episode.title.toLowerCase().includes(notificationSearch.toLowerCase()));
+				notif.episode.title.toLowerCase().includes(notificationSearch.toLowerCase())) ||
+			(notif.episodes && notif.episodes.some(ep =>
+				ep.title.toLowerCase().includes(notificationSearch.toLowerCase())
+			));
 		return matchesType && matchesSearch;
 	});
 
@@ -323,21 +326,45 @@ function App() {
 											)}
 											<div className="notification-text">
 												<h4>{notif.title}{notif.year && ` (${notif.year})`}</h4>
-												{notif.episode && (
+												{notif.episodes && notif.episodes.length > 0 ? (
+													<div className="notification-episodes-list">
+														{notif.episodes.length === 1 ? (
+															<p>
+																S{notif.episodes[0].season.toString().padStart(2, '0')}E
+																{notif.episodes[0].number.toString().padStart(2, '0')}:{' '}
+																{notif.episodes[0].title}
+															</p>
+														) : (
+															<>
+																<p className="notification-batch">
+																	{notif.episodes.length} episodes imported
+																</p>
+																<ul className="notification-episodes-preview">
+																	{notif.episodes.slice(0, 3).map((ep, idx) => (
+																		<li key={idx}>
+																			S{ep.season.toString().padStart(2, '0')}E
+																			{ep.number.toString().padStart(2, '0')}: {ep.title}
+																		</li>
+																	))}
+																	{notif.episodes.length > 3 && (
+																		<li className="episodes-more">
+																			+{notif.episodes.length - 3} more...
+																		</li>
+																	)}
+																</ul>
+															</>
+														)}
+													</div>
+												) : notif.episode && (
 													<p>
-														S{notif.episode.season}E
-														{notif.episode.number}:{' '}
+														S{notif.episode.season.toString().padStart(2, '0')}E
+														{notif.episode.number.toString().padStart(2, '0')}:{' '}
 														{notif.episode.title}
 													</p>
 												)}
 												{notif.quality && (
 													<p className="notification-quality">
 														Quality: {notif.quality}
-													</p>
-												)}
-												{notif.episode_count && notif.episode_count > 1 && (
-													<p className="notification-batch">
-														{notif.episode_count} episodes in this batch
 													</p>
 												)}
 											</div>
@@ -472,23 +499,46 @@ function App() {
 									)}
 							</div>
 						</div>
-						{selectedNotification.episode && (
-							<div className="notification-details-episode">
-								<h4>Episode Information</h4>
-								<p>
-									<strong>Season:</strong> {selectedNotification.episode.season}
-								</p>
-								<p>
-									<strong>Episode:</strong> {selectedNotification.episode.number}
-								</p>
-								<p>
-									<strong>Title:</strong> {selectedNotification.episode.title}
-								</p>
-								<p>
-									<strong>Episode Code:</strong> S
-									{selectedNotification.episode.season.toString().padStart(2, '0')}E
-									{selectedNotification.episode.number.toString().padStart(2, '0')}
-								</p>
+						{(selectedNotification.episodes || selectedNotification.episode) && (
+							<div className="notification-details-episodes">
+								<h4>
+									{selectedNotification.episodes && selectedNotification.episodes.length > 1
+										? `Imported Episodes (${selectedNotification.episodes.length})`
+										: 'Episode Information'}
+								</h4>
+								{selectedNotification.episodes && selectedNotification.episodes.length > 0 ? (
+									<div className="episodes-list">
+										{selectedNotification.episodes.map((ep, idx) => (
+											<div key={idx} className="episode-detail-card">
+												<div className="episode-header">
+													<strong>
+														S{ep.season.toString().padStart(2, '0')}E
+														{ep.number.toString().padStart(2, '0')}
+													</strong>
+													<span className="episode-title">{ep.title}</span>
+												</div>
+												{ep.airDate && ep.airDate !== 'N/A' && (
+													<p className="episode-meta">
+														<strong>Air Date:</strong> {ep.airDate}
+													</p>
+												)}
+												{ep.overview && (
+													<p className="episode-overview">{ep.overview}</p>
+												)}
+											</div>
+										))}
+									</div>
+								) : selectedNotification.episode && (
+									<div className="episode-detail-card">
+										<div className="episode-header">
+											<strong>
+												S{selectedNotification.episode.season.toString().padStart(2, '0')}E
+												{selectedNotification.episode.number.toString().padStart(2, '0')}
+											</strong>
+											<span className="episode-title">{selectedNotification.episode.title}</span>
+										</div>
+									</div>
+								)}
 							</div>
 						)}
 					</div>

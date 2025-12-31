@@ -237,17 +237,31 @@ async def _process_and_send_buffered_notifications(series_id: str, bot_instance:
         )
 
         # Record notification in history
+        # Build list of all episodes for history
+        all_episodes = []
+        for item in sorted_items:
+            ep_data = item.get('episode_data', {})
+            all_episodes.append({
+                'season': ep_data.get('seasonNumber', 0),
+                'number': ep_data.get('episodeNumber', 0),
+                'title': ep_data.get('title', 'Unknown Title'),
+                'airDate': ep_data.get('airDate', 'N/A'),
+                'overview': ep_data.get('overview', '')
+            })
+
         latest_season_num = episode_data.get('seasonNumber', 0)
         latest_episode_num = episode_data.get('episodeNumber', 0)
         latest_episode_title = episode_data.get('title', 'Unknown Title')
         NOTIFICATION_HISTORY.append({
             'type': 'sonarr',
             'title': series_data.get('title', 'Unknown Series'),
+            'year': series_data.get('year'),
             'episode': {
                 'season': latest_season_num,
                 'number': latest_episode_num,
                 'title': latest_episode_title
             },
+            'episodes': all_episodes,  # All episodes in this batch
             'quality': quality_string,
             'timestamp': datetime.now().isoformat(),
             'episode_count': ep_count,
