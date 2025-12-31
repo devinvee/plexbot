@@ -422,38 +422,69 @@ def scan_plex_item(item_key: str) -> bool:
     Returns:
         True if scan was successful, False otherwise.
     """
+    logger.info(f"scan_plex_item called with item_key: {item_key}")
     plex = get_plex_client()
     if not plex:
         logger.error("Cannot scan Plex item: client not available")
         return False
     
     try:
-        # Get the item
-        item = plex.fetchItem(item_key)
+        logger.info(f"Fetching item from Plex with key: {item_key}")
+        # Get the item - item_key might need to be an integer or might have a prefix
+        # Try fetching directly first
+        try:
+            item = plex.fetchItem(item_key)
+        except Exception as fetch_error:
+            logger.warning(f"Direct fetch failed: {fetch_error}, trying alternative methods")
+            # Try with /library/metadata/ prefix if it's just a number
+            try:
+                if item_key.isdigit():
+                    item = plex.fetchItem(f"/library/metadata/{item_key}")
+                else:
+                    raise fetch_error
+            except Exception as e2:
+                logger.error(f"Failed to fetch item with key {item_key}: {e2}")
+                return False
+        
         if not item:
             logger.error(f"Item not found: {item_key}")
             return False
         
         item_title = getattr(item, 'title', 'Unknown')
+        logger.info(f"Found item: {item_title} (key: {item.key})")
         
         # Get the library section for this item
-        section = item.section()
+        try:
+            section = item.section()
+        except Exception as section_error:
+            logger.error(f"Error getting section for item: {section_error}")
+            return False
+        
         if not section:
             logger.error(f"Could not find section for item: {item_key}")
             return False
+        
+        logger.info(f"Item section: {section.title} (type: {section.type})")
         
         # Use the item's path to trigger a partial scan
         if hasattr(item, 'locations') and item.locations:
             media_path = item.locations[0]
             logger.info(f"Scanning item '{item_title}' at path: {media_path}")
-            return scan_plex_library(library_name=None, media_path=media_path)
+            result = scan_plex_library(library_name=None, media_path=media_path)
+            logger.info(f"Scan result: {result}")
+            return result
         else:
             # Fallback: scan the entire library section
             logger.info(f"Item has no locations, scanning entire library section for: {item_title}")
-            section.update()
-            return True
+            try:
+                section.update()
+                logger.info(f"Successfully triggered library scan for section: {section.title}")
+                return True
+            except Exception as update_error:
+                logger.error(f"Error updating section: {update_error}")
+                return False
     except Exception as e:
-        logger.error(f"Failed to scan Plex item: {e}", exc_info=True)
+        logger.error(f"Failed to scan Plex item {item_key}: {e}", exc_info=True)
         return False
 
 

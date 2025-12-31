@@ -892,11 +892,14 @@ def api_plex_library_items(library_key):
 @app.route('/api/plex/item/<item_key>/scan', methods=['POST'])
 def api_plex_item_scan(item_key):
     """Scans a specific Plex item (show/movie)."""
+    logger.info(f"Received scan request for item key: {item_key}")
     try:
         bot_instance = app.config.get('discord_bot')
         if not bot_instance:
+            logger.error("Bot instance not available for item scan")
             return jsonify({"success": False, "message": "Bot instance not available"}), 500
 
+        logger.info(f"Starting async scan for item: {item_key}")
         # Run scan in async context
         loop = bot_instance.loop
         if loop.is_running():
@@ -904,23 +907,32 @@ def api_plex_item_scan(item_key):
                 scan_plex_item_async(item_key),
                 loop
             )
-            result = future.result(timeout=30)
+            try:
+                result = future.result(timeout=30)
+            except asyncio.TimeoutError:
+                logger.error(f"Timeout waiting for item scan to complete: {item_key}")
+                return jsonify({
+                    "success": False,
+                    "message": "Scan operation timed out"
+                }), 500
         else:
             result = asyncio.run(scan_plex_item_async(item_key))
 
+        logger.info(f"Scan result for item {item_key}: {result}")
         if result:
             return jsonify({
                 "success": True,
                 "message": "Successfully triggered Plex scan for item"
             })
         else:
+            logger.warning(f"Scan returned False for item: {item_key}")
             return jsonify({
                 "success": False,
-                "message": "Failed to trigger Plex scan for item"
+                "message": "Failed to trigger Plex scan for item. Check server logs for details."
             }), 500
 
     except Exception as e:
-        logger.error(f"Error triggering item scan: {e}", exc_info=True)
+        logger.error(f"Error triggering item scan for {item_key}: {e}", exc_info=True)
         return jsonify({
             "success": False,
             "message": f"Error: {str(e)}"

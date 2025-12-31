@@ -117,21 +117,34 @@ function App() {
 
 	const handleItemScan = async (item) => {
 		try {
-			const response = await fetch(`${API_BASE}/plex/item/${item.key}/scan`, {
+			console.log(`Scanning item: ${item.title} (key: ${item.key})`);
+			// URL encode the item key in case it contains special characters
+			const encodedKey = encodeURIComponent(item.key);
+			const response = await fetch(`${API_BASE}/plex/item/${encodedKey}/scan`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 			});
+			
+			if (!response.ok) {
+				const errorText = await response.text();
+				console.error('Scan request failed:', response.status, errorText);
+				alert(`Failed to trigger scan: ${response.status} ${errorText}`);
+				return;
+			}
+			
 			const data = await response.json();
+			console.log('Scan response:', data);
 			if (data.success) {
 				alert(`Successfully triggered scan for ${item.title}!`);
 				setShowBrowseModal(false);
 				setSelectedLibrary(null);
 				setLibraryItems([]);
 			} else {
-				alert(`Error: ${data.message}`);
+				alert(`Error: ${data.message || 'Unknown error'}`);
 			}
 		} catch (error) {
-			alert('Failed to trigger scan');
+			console.error('Error triggering scan:', error);
+			alert(`Failed to trigger scan: ${error.message}`);
 		}
 	};
 
