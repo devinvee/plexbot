@@ -118,17 +118,23 @@ function App() {
 	const handleItemScan = async (item) => {
 		try {
 			console.log(`Scanning item: ${item.title} (key: ${item.key})`);
-			// URL encode the item key in case it contains special characters
-			const encodedKey = encodeURIComponent(item.key);
-			const response = await fetch(`${API_BASE}/plex/item/${encodedKey}/scan`, {
+			// Send item_key in request body to avoid URL encoding issues
+			const response = await fetch(`${API_BASE}/plex/item/scan`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ item_key: item.key }),
 			});
 			
 			if (!response.ok) {
 				const errorText = await response.text();
 				console.error('Scan request failed:', response.status, errorText);
-				alert(`Failed to trigger scan: ${response.status} ${errorText}`);
+				// Try to parse as JSON if possible, otherwise show raw text
+				try {
+					const errorData = JSON.parse(errorText);
+					alert(`Failed to trigger scan: ${errorData.message || errorText}`);
+				} catch {
+					alert(`Failed to trigger scan: ${response.status} ${errorText.substring(0, 100)}`);
+				}
 				return;
 			}
 			

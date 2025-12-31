@@ -889,11 +889,21 @@ def api_plex_library_items(library_key):
         }), 500
 
 
-@app.route('/api/plex/item/<item_key>/scan', methods=['POST'])
-def api_plex_item_scan(item_key):
+@app.route('/api/plex/item/scan', methods=['POST'])
+def api_plex_item_scan():
     """Scans a specific Plex item (show/movie)."""
-    logger.info(f"Received scan request for item key: {item_key}")
     try:
+        data = request.json or {}
+        item_key = data.get('item_key')
+        
+        if not item_key:
+            return jsonify({
+                "success": False,
+                "message": "Missing item_key in request body"
+            }), 400
+        
+        logger.info(f"Received scan request for item key: {item_key}")
+        
         bot_instance = app.config.get('discord_bot')
         if not bot_instance:
             logger.error("Bot instance not available for item scan")
@@ -910,7 +920,8 @@ def api_plex_item_scan(item_key):
             try:
                 result = future.result(timeout=30)
             except asyncio.TimeoutError:
-                logger.error(f"Timeout waiting for item scan to complete: {item_key}")
+                logger.error(
+                    f"Timeout waiting for item scan to complete: {item_key}")
                 return jsonify({
                     "success": False,
                     "message": "Scan operation timed out"
@@ -932,7 +943,8 @@ def api_plex_item_scan(item_key):
             }), 500
 
     except Exception as e:
-        logger.error(f"Error triggering item scan for {item_key}: {e}", exc_info=True)
+        logger.error(
+            f"Error triggering item scan: {e}", exc_info=True)
         return jsonify({
             "success": False,
             "message": f"Error: {str(e)}"
