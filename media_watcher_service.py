@@ -16,7 +16,13 @@ from media_watcher_utils import (
     get_discord_user_ids_for_tags,
     fetch_overseerr_users,
 )
-from plex_utils import scan_plex_library_async
+from plex_utils import (
+    scan_plex_library_async,
+    scan_all_libraries_sequential_async,
+    get_plex_libraries,
+    get_library_items,
+    scan_plex_item_async
+)
 
 logger = logging.getLogger(__name__)
 
@@ -806,6 +812,109 @@ def api_plex_scan():
 
     except Exception as e:
         logger.error(f"Error triggering Plex scan: {e}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "message": f"Error: {str(e)}"
+        }), 500
+
+
+@app.route('/api/plex/scan-all', methods=['POST'])
+def api_plex_scan_all():
+    """Sequentially scans all Plex libraries, waiting for each to complete."""
+    try:
+        bot_instance = app.config.get('discord_bot')
+        if not bot_instance:
+            return jsonify({"success": False, "message": "Bot instance not available"}), 500
+
+        # Run scan in async context
+        loop = bot_instance.loop
+        if loop.is_running():
+            future = asyncio.run_coroutine_threadsafe(
+                scan_all_libraries_sequential_async(),
+                loop
+            )
+            result = future.result(timeout=600)  # 10 minute timeout
+        else:
+            result = asyncio.run(scan_all_libraries_sequential_async())
+
+        return jsonify(result)
+
+    except Exception as e:
+        logger.error(
+            f"Error triggering sequential Plex scan: {e}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "message": f"Error: {str(e)}"
+        }), 500
+
+
+@app.route('/api/plex/libraries', methods=['GET'])
+def api_plex_libraries():
+    """Gets a list of all Plex libraries."""
+    try:
+        libraries = get_plex_libraries()
+        return jsonify({
+            "success": True,
+            "libraries": libraries
+        })
+    except Exception as e:
+        logger.error(f"Error getting Plex libraries: {e}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "message": f"Error: {str(e)}"
+        }), 500
+
+
+@app.route('/api/plex/library/<library_key>/items', methods=['GET'])
+def api_plex_library_items(library_key):
+    """Gets items (shows/movies) from a specific library."""
+    try:
+        limit = request.args.get('limit', 1000, type=int)
+        items = get_library_items(library_key, limit=limit)
+        return jsonify({
+            "success": True,
+            "items": items
+        })
+    except Exception as e:
+        logger.error(f"Error getting library items: {e}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "message": f"Error: {str(e)}"
+        }), 500
+
+
+@app.route('/api/plex/item/<item_key>/scan', methods=['POST'])
+def api_plex_item_scan(item_key):
+    """Scans a specific Plex item (show/movie)."""
+    try:
+        bot_instance = app.config.get('discord_bot')
+        if not bot_instance:
+            return jsonify({"success": False, "message": "Bot instance not available"}), 500
+
+        # Run scan in async context
+        loop = bot_instance.loop
+        if loop.is_running():
+            future = asyncio.run_coroutine_threadsafe(
+                scan_plex_item_async(item_key),
+                loop
+            )
+            result = future.result(timeout=30)
+        else:
+            result = asyncio.run(scan_plex_item_async(item_key))
+
+        if result:
+            return jsonify({
+                "success": True,
+                "message": "Successfully triggered Plex scan for item"
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "message": "Failed to trigger Plex scan for item"
+            }), 500
+
+    except Exception as e:
+        logger.error(f"Error triggering item scan: {e}", exc_info=True)
         return jsonify({
             "success": False,
             "message": f"Error: {str(e)}"

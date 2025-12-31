@@ -34,6 +34,13 @@ function App() {
 	const [scanResult, setScanResult] = useState(null);
 	const [notificationFilter, setNotificationFilter] = useState('all');
 	const [notificationSearch, setNotificationSearch] = useState('');
+	const [showBrowseModal, setShowBrowseModal] = useState(false);
+	const [libraries, setLibraries] = useState([]);
+	const [selectedLibrary, setSelectedLibrary] = useState(null);
+	const [libraryItems, setLibraryItems] = useState([]);
+	const [loadingItems, setLoadingItems] = useState(false);
+	const [scanningAll, setScanningAll] = useState(false);
+	const [scanAllProgress, setScanAllProgress] = useState(null);
 
 	useEffect(() => {
 		fetchStatus();
@@ -64,6 +71,58 @@ function App() {
 			setNotifications(data.notifications || []);
 		} catch (error) {
 			console.error('Failed to fetch notifications:', error);
+		}
+	};
+
+	const fetchLibraries = async () => {
+		try {
+			const response = await fetch(`${API_BASE}/plex/libraries`);
+			const data = await response.json();
+			if (data.success) {
+				setLibraries(data.libraries || []);
+			}
+		} catch (error) {
+			console.error('Failed to fetch libraries:', error);
+		}
+	};
+
+	const fetchLibraryItems = async (libraryKey) => {
+		setLoadingItems(true);
+		try {
+			const response = await fetch(`${API_BASE}/plex/library/${libraryKey}/items`);
+			const data = await response.json();
+			if (data.success) {
+				setLibraryItems(data.items || []);
+			}
+		} catch (error) {
+			console.error('Failed to fetch library items:', error);
+		} finally {
+			setLoadingItems(false);
+		}
+	};
+
+	const handleLibrarySelect = (library) => {
+		setSelectedLibrary(library);
+		fetchLibraryItems(library.key);
+	};
+
+	const handleItemScan = async (item) => {
+		try {
+			const response = await fetch(`${API_BASE}/plex/item/${item.key}/scan`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+			});
+			const data = await response.json();
+			if (data.success) {
+				alert(`Successfully triggered scan for ${item.title}!`);
+				setShowBrowseModal(false);
+				setSelectedLibrary(null);
+				setLibraryItems([]);
+			} else {
+				alert(`Error: ${data.message}`);
+			}
+		} catch (error) {
+			alert('Failed to trigger scan');
 		}
 	};
 
@@ -140,53 +199,59 @@ function App() {
 					<div className="quick-actions-grid">
 						<button
 							className="quick-action-btn"
-							onClick={() => setShowScanModal(true)}
-						>
-							<div className="quick-action-icon">🔍</div>
-							<div className="quick-action-label">Scan Plex Library</div>
-						</button>
-						<button
-							className="quick-action-btn"
 							onClick={async () => {
+								setScanningAll(true);
+								setScanAllProgress(null);
 								try {
-									const response = await fetch(`${API_BASE}/plex/scan`, {
+									const response = await fetch(`${API_BASE}/plex/scan-all`, {
 										method: 'POST',
 										headers: { 'Content-Type': 'application/json' },
-										body: JSON.stringify({ library_name: null }),
 									});
 									const data = await response.json();
+									setScanAllProgress(data);
 									if (data.success) {
-										alert('Plex scan triggered successfully!');
+										alert(`Successfully scanned ${data.scanned} of ${data.total} libraries!`);
 									} else {
-										alert(`Error: ${data.message}`);
+										alert(`Scan completed with issues: ${data.message || 'Some libraries failed to scan'}`);
 									}
 								} catch (error) {
 									alert('Failed to trigger scan');
+								} finally {
+									setScanningAll(false);
 								}
 							}}
+							disabled={scanningAll}
 						>
-							<div className="quick-action-icon">⚡</div>
-							<div className="quick-action-label">Quick Scan All</div>
+							<div className="quick-action-icon">📚</div>
+							<div className="quick-action-label">
+								{scanningAll ? 'Scanning...' : 'Scan All Libraries'}
+							</div>
 						</button>
 						<button
 							className="quick-action-btn"
 							onClick={() => {
-								fetchStatus();
-								fetchNotifications();
-								alert('Dashboard refreshed!');
+								setShowBrowseModal(true);
+								fetchLibraries();
 							}}
 						>
-							<div className="quick-action-icon">🔄</div>
-							<div className="quick-action-label">Refresh Dashboard</div>
-						</button>
-						<button
-							className="quick-action-btn"
-							onClick={() => setShowSettings(true)}
-						>
-							<div className="quick-action-icon">⚙️</div>
-							<div className="quick-action-label">Open Settings</div>
+							<div className="quick-action-icon">🎬</div>
+							<div className="quick-action-label">Scan a Show/Movie</div>
 						</button>
 					</div>
+					{scanAllProgress && (
+						<div className="scan-progress">
+							<p>Progress: {scanAllProgress.scanned} / {scanAllProgress.total} libraries scanned</p>
+							{scanAllProgress.results && (
+								<ul className="scan-results-list">
+									{scanAllProgress.results.map((result, idx) => (
+										<li key={idx} className={result.success ? 'success' : 'error'}>
+											{result.library}: {result.success ? '✓' : '✗'} {result.message || ''}
+										</li>
+									))}
+								</ul>
+							)}
+						</div>
+					)}
 				</section>
 
 				<section className="status-section">
@@ -439,6 +504,89 @@ function App() {
 				onClose={() => setShowSettings(false)}
 				status={status}
 			/>
+
+			<Modal
+				isOpen={showBrowseModal}
+				onClose={() => {
+					setShowBrowseModal(false);
+					setSelectedLibrary(null);
+					setLibraryItems([]);
+				}}
+				title="Scan a Show/Movie"
+			>
+				<div className="browse-modal">
+					{!selectedLibrary ? (
+						<div className="library-selector">
+							<p>Select a library to browse:</p>
+							<div className="libraries-grid">
+								{libraries.map((lib) => (
+									<button
+										key={lib.key}
+										className="library-card"
+										onClick={() => handleLibrarySelect(lib)}
+									>
+										<div className="library-icon">
+											{lib.type === 'show' ? '📺' : lib.type === 'movie' ? '🎬' : '📚'}
+										</div>
+										<div className="library-name">{lib.title}</div>
+										<div className="library-type">{lib.type}</div>
+									</button>
+								))}
+							</div>
+						</div>
+					) : (
+						<div className="items-browser">
+							<div className="browser-header">
+								<button
+									className="btn btn-secondary"
+									onClick={() => {
+										setSelectedLibrary(null);
+										setLibraryItems([]);
+									}}
+								>
+									← Back to Libraries
+								</button>
+								<h3>{selectedLibrary.title}</h3>
+							</div>
+							{loadingItems ? (
+								<div className="loading">Loading items...</div>
+							) : (
+								<div className="items-list">
+									{libraryItems.length === 0 ? (
+										<p>No items found in this library.</p>
+									) : (
+										libraryItems.map((item) => (
+											<div
+												key={item.key}
+												className="item-card"
+												onClick={() => handleItemScan(item)}
+												style={{ cursor: 'pointer' }}
+											>
+												{item.thumb && (
+													<img
+														src={item.thumb}
+														alt={item.title}
+														className="item-thumb"
+														onError={(e) => {
+															e.target.style.display = 'none';
+														}}
+													/>
+												)}
+												<div className="item-info">
+													<div className="item-title">{item.title}</div>
+													{item.year && (
+														<div className="item-year">{item.year}</div>
+													)}
+												</div>
+											</div>
+										))
+									)}
+								</div>
+							)}
+						</div>
+					)}
+				</div>
+			</Modal>
 
 			<Modal
 				isOpen={showNotificationDetails}
