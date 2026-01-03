@@ -926,7 +926,7 @@ def api_test_arr_instance():
             arr_api_key=arr_api_key,
             bot_url=bot_url,
             arr_type=arr_type,
-            name=instance_name or f"PlexBot {arr_type.capitalize()} Webhook",
+            name="Plexbot",
             auto_create=auto_create_webhook
         )
         
