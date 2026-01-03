@@ -3,7 +3,7 @@ import './App.css';
 
 const API_BASE = '/api';
 
-export default function SettingsModal({ isOpen, onClose, status }) {
+export default function SettingsModal({ isOpen, onClose, status, embedded = false }) {
 	const [config, setConfig] = useState(null);
 	const [activeTab, setActiveTab] = useState('plex');
 	const [saving, setSaving] = useState(false);
@@ -127,16 +127,17 @@ export default function SettingsModal({ isOpen, onClose, status }) {
 		{ id: 'general', label: 'General' },
 	];
 
-	return (
-		<div className="modal-overlay" onClick={onClose}>
-			<div className="modal-content settings-modal-large" onClick={(e) => e.stopPropagation()}>
+	const content = (
+		<>
+			{!embedded && (
 				<div className="modal-header">
 					<h2>Configuration</h2>
 					<button className="modal-close" onClick={onClose}>
 						×
 					</button>
 				</div>
-				<div className="modal-body">
+			)}
+			<div className={embedded ? "settings-content" : "modal-body"}>
 					{loading ? (
 						<div className="loading">Loading configuration...</div>
 					) : config ? (
@@ -721,6 +722,18 @@ export default function SettingsModal({ isOpen, onClose, status }) {
 						<div className="error">Failed to load configuration</div>
 					)}
 				</div>
+			</div>
+		</>
+	);
+
+	if (embedded) {
+		return <div className="settings-embedded">{content}</div>;
+	}
+
+	return (
+		<div className="modal-overlay" onClick={onClose}>
+			<div className="modal-content settings-modal-large" onClick={(e) => e.stopPropagation()}>
+				{content}
 			</div>
 		</div>
 	);

@@ -272,37 +272,20 @@ function App() {
 						{sidebarOpen && <span className="nav-label">Dashboard</span>}
 					</button>
 					<button
-						className={`nav-item ${activeView === 'scans' ? 'active' : ''}`}
-						onClick={() => setActiveView('scans')}
+						className={`nav-item ${activeView === 'activity' ? 'active' : ''}`}
+						onClick={() => setActiveView('activity')}
 					>
 						<span className="nav-icon">📊</span>
-						{sidebarOpen && <span className="nav-label">Scans</span>}
+						{sidebarOpen && <span className="nav-label">Activity</span>}
 					</button>
 					<button
-						className={`nav-item ${activeView === 'notifications' ? 'active' : ''}`}
-						onClick={() => setActiveView('notifications')}
-					>
-						<span className="nav-icon">🔔</span>
-						{sidebarOpen && <span className="nav-label">Notifications</span>}
-					</button>
-					<button
-						className={`nav-item ${activeView === 'activities' ? 'active' : ''}`}
-						onClick={() => setActiveView('activities')}
-					>
-						<span className="nav-icon">⚡</span>
-						{sidebarOpen && <span className="nav-label">Activities</span>}
-					</button>
-				</nav>
-
-				<div className="sidebar-footer">
-					<button
-						className="nav-item"
-						onClick={() => setShowSettings(true)}
+						className={`nav-item ${activeView === 'configure' ? 'active' : ''}`}
+						onClick={() => setActiveView('configure')}
 					>
 						<span className="nav-icon">⚙️</span>
-						{sidebarOpen && <span className="nav-label">Settings</span>}
+						{sidebarOpen && <span className="nav-label">Configure</span>}
 					</button>
-				</div>
+				</nav>
 			</aside>
 
 			{/* Main Content Area */}
@@ -311,9 +294,8 @@ function App() {
 					<div className="header-left">
 						<h2 className="page-title">
 							{activeView === 'dashboard' && 'Dashboard'}
-							{activeView === 'scans' && 'Scans'}
-							{activeView === 'notifications' && 'Notifications'}
-							{activeView === 'activities' && 'Plex Activities'}
+							{activeView === 'activity' && 'Activity'}
+							{activeView === 'configure' && 'Configuration'}
 						</h2>
 					</div>
 					<div className="header-right">
@@ -517,163 +499,144 @@ function App() {
 						</div>
 					)}
 
-					{activeView === 'scans' && (
+					{activeView === 'activity' && (
 						<div className="view-content">
-							<div className="dashboard-card">
-								<div className="card-header">
-									<h3>Pending Scans</h3>
-									<button
-										className="btn-icon"
-										onClick={() => {
-											fetchPendingScans();
-											fetchPlexActivities();
-										}}
-										title="Refresh"
-									>
-										🔄
-									</button>
-								</div>
-								<div className="card-content">
-									{pendingScans.length > 0 ? (
-										<div className="scans-list-full">
-											{pendingScans.map((scan) => (
-												<div key={scan.scan_id} className="scan-card-full">
-													<div className="scan-header-full">
-														<div className="scan-info-full">
-															<span className="scan-type-badge">{scan.type}</span>
-															<span className="scan-name-full">{scan.name}</span>
+							<div className="activity-grid">
+								{/* Pending Scans Card */}
+								<div className="dashboard-card">
+									<div className="card-header">
+										<h3>Pending Scans</h3>
+										<button
+											className="btn-icon"
+											onClick={() => {
+												fetchPendingScans();
+												fetchPlexActivities();
+											}}
+											title="Refresh"
+										>
+											🔄
+										</button>
+									</div>
+									<div className="card-content">
+										{pendingScans.length > 0 ? (
+											<div className="scans-list-compact">
+												{pendingScans.slice(0, 5).map((scan) => (
+													<div key={scan.scan_id} className="scan-item-compact">
+														<div className="scan-info-compact">
+															<span className="scan-name-compact">{scan.name}</span>
+															<span className="scan-type-compact">{scan.type}</span>
 														</div>
-														<span className={`scan-status-badge ${scan.status}`}>
-															{scan.status === 'pending' ? '⏳ Pending' : scan.status === 'completed' ? '✓ Completed' : '✗ Failed'}
+														<span className={`scan-status-compact ${scan.status}`}>
+															{scan.status === 'pending' ? '⏳' : scan.status === 'completed' ? '✓' : '✗'}
 														</span>
 													</div>
-													<div className="scan-time-full">
-														Started: {new Date(scan.timestamp).toLocaleString()}
-														{scan.completed_at && (
-															<span> • Completed: {new Date(scan.completed_at).toLocaleString()}</span>
-														)}
+												))}
+												{pendingScans.length > 5 && (
+													<div className="more-items">
+														+{pendingScans.length - 5} more scans
 													</div>
-												</div>
-											))}
-										</div>
-									) : (
-										<div className="empty-state">No pending scans</div>
-									)}
+												)}
+											</div>
+										) : (
+											<div className="empty-state-compact">No pending scans</div>
+										)}
+									</div>
 								</div>
-							</div>
-						</div>
-					)}
 
-					{activeView === 'activities' && (
-						<div className="view-content">
-							<div className="dashboard-card">
-								<div className="card-header">
-									<h3>Plex Activities & Queued Scans</h3>
-									<button
-										className="btn-icon"
-										onClick={() => {
-											fetchPlexActivities();
-											fetchPendingScans();
-										}}
-										title="Refresh"
-									>
-										🔄
-									</button>
-								</div>
-								<div className="card-content">
-									{plexActivities.length > 0 ? (
-										<div className="activities-list-full">
-											{plexActivities.map((activity, idx) => (
-												<div key={activity.uuid || idx} className="activity-card-full">
-													<div className="activity-header-full">
-														<div className="activity-info-full">
-															<span className="activity-type-badge">{activity.type}</span>
-															<span className="activity-title-full">{activity.title}</span>
+								{/* Plex Activities Card */}
+								<div className="dashboard-card">
+									<div className="card-header">
+										<h3>Plex Activities</h3>
+										<button
+											className="btn-icon"
+											onClick={() => {
+												fetchPlexActivities();
+												fetchPendingScans();
+											}}
+											title="Refresh"
+										>
+											🔄
+										</button>
+									</div>
+									<div className="card-content">
+										{plexActivities.length > 0 ? (
+											<div className="activities-list-compact">
+												{plexActivities.slice(0, 5).map((activity, idx) => (
+													<div key={activity.uuid || idx} className="activity-item-compact">
+														<div className="activity-info-compact">
+															<span className="activity-title-compact">{activity.title}</span>
 															{activity.subtitle && (
-																<span className="activity-subtitle-full">{activity.subtitle}</span>
-															)}
-															{activity.library_name && (
-																<span className="activity-library-full">({activity.library_name})</span>
+																<span className="activity-subtitle-compact">{activity.subtitle}</span>
 															)}
 														</div>
 														{activity.progress > 0 && (
-															<span className="activity-progress-badge">{activity.progress}%</span>
+															<div className="activity-progress-compact">
+																<div 
+																	className="activity-progress-bar-compact"
+																	style={{ width: `${activity.progress}%` }}
+																></div>
+																<span className="activity-progress-text">{activity.progress}%</span>
+															</div>
 														)}
 													</div>
-													{activity.progress > 0 && (
-														<div className="activity-progress-bar-full">
-															<div 
-																className="activity-progress-fill-full" 
-																style={{ width: `${activity.progress}%` }}
-															></div>
-														</div>
-													)}
-												</div>
-											))}
-										</div>
-									) : (
-										<div className="empty-state">No active activities</div>
-									)}
-								</div>
-							</div>
-						</div>
-					)}
-
-					{activeView === 'notifications' && (
-						<div className="view-content">
-							<div className="dashboard-card">
-								<div className="card-header">
-									<h3>Recent Notifications</h3>
-									<div className="notifications-controls">
-										<input
-											type="text"
-											className="notification-search"
-											placeholder="Search..."
-											value={notificationSearch}
-											onChange={(e) => setNotificationSearch(e.target.value)}
-										/>
-										<select
-											className="notification-filter"
-											value={notificationFilter}
-											onChange={(e) => setNotificationFilter(e.target.value)}
-										>
-											<option value="all">All Types</option>
-											<option value="sonarr">Sonarr</option>
-											<option value="radarr">Radarr</option>
-											<option value="readarr">Readarr</option>
-										</select>
-									</div>
-								</div>
-								<div className="card-content">
-									<div className="notifications-list-full">
-										{filteredNotifications.length === 0 ? (
-											<div className="empty-state">
-												{notifications.length === 0
-													? 'No notifications in the last 24 hours'
-													: 'No notifications match your filters'}
+												))}
+												{plexActivities.length > 5 && (
+													<div className="more-items">
+														+{plexActivities.length - 5} more activities
+													</div>
+												)}
 											</div>
 										) : (
-											filteredNotifications.map((notif, idx) => (
-												<div
-													key={idx}
-													className="notification-card-full"
-													onClick={() => {
-														setSelectedNotification(notif);
-														setShowNotificationDetails(true);
-													}}
-													style={{ cursor: 'pointer' }}
-												>
-													<div className="notification-header-full">
-														<span className={`notification-type-badge ${notif.type}`}>
-															{notif.type}
-														</span>
-														<span className="notification-time-full">
-															{new Date(notif.timestamp).toLocaleString()}
-														</span>
-													</div>
-													<div className="notification-content-full">
+											<div className="empty-state-compact">No active activities</div>
+										)}
+									</div>
+								</div>
+
+								{/* Notifications Card */}
+								<div className="dashboard-card dashboard-card-wide">
+									<div className="card-header">
+										<h3>Recent Notifications</h3>
+										<div className="notifications-controls-compact">
+											<input
+												type="text"
+												className="notification-search-compact"
+												placeholder="Search..."
+												value={notificationSearch}
+												onChange={(e) => setNotificationSearch(e.target.value)}
+											/>
+											<select
+												className="notification-filter-compact"
+												value={notificationFilter}
+												onChange={(e) => setNotificationFilter(e.target.value)}
+											>
+												<option value="all">All</option>
+												<option value="sonarr">Sonarr</option>
+												<option value="radarr">Radarr</option>
+												<option value="readarr">Readarr</option>
+											</select>
+										</div>
+									</div>
+									<div className="card-content">
+										<div className="notifications-list-compact">
+											{filteredNotifications.length === 0 ? (
+												<div className="empty-state-compact">
+													{notifications.length === 0
+														? 'No notifications in the last 24 hours'
+														: 'No notifications match your filters'}
+												</div>
+											) : (
+												filteredNotifications.slice(0, 10).map((notif, idx) => (
+													<div
+														key={idx}
+														className="notification-item-compact"
+														onClick={() => {
+															setSelectedNotification(notif);
+															setShowNotificationDetails(true);
+														}}
+														style={{ cursor: 'pointer' }}
+													>
 														{(notif.poster_url || notif.fanart_url || notif.backdrop_url) && (
-															<div className="notification-image-full">
+															<div className="notification-image-compact">
 																<img
 																	src={notif.poster_url || notif.fanart_url || notif.backdrop_url}
 																	alt={notif.title}
@@ -683,57 +646,48 @@ function App() {
 																/>
 															</div>
 														)}
-														<div className="notification-text-full">
-															<h4>{notif.title}{notif.year && ` (${notif.year})`}</h4>
-															{notif.episodes && notif.episodes.length > 0 ? (
-																<div className="notification-episodes-list">
-																	{notif.episodes.length === 1 ? (
-																		<p>
-																			S{notif.episodes[0].season.toString().padStart(2, '0')}E
-																			{notif.episodes[0].number.toString().padStart(2, '0')}:{' '}
-																			{notif.episodes[0].title}
-																		</p>
-																	) : (
-																		<>
-																			<p className="notification-batch">
-																				{notif.episodes.length} episodes imported
-																			</p>
-																			<ul className="notification-episodes-preview">
-																				{notif.episodes.slice(0, 3).map((ep, idx) => (
-																					<li key={idx}>
-																						S{ep.season.toString().padStart(2, '0')}E
-																						{ep.number.toString().padStart(2, '0')}: {ep.title}
-																					</li>
-																				))}
-																				{notif.episodes.length > 3 && (
-																					<li className="episodes-more">
-																						+{notif.episodes.length - 3} more...
-																					</li>
-																				)}
-																			</ul>
-																		</>
-																	)}
-																</div>
-															) : notif.episode && (
-																<p>
-																	S{notif.episode.season.toString().padStart(2, '0')}E
-																	{notif.episode.number.toString().padStart(2, '0')}:{' '}
-																	{notif.episode.title}
+														<div className="notification-info-compact">
+															<div className="notification-header-compact">
+																<span className={`notification-type-compact ${notif.type}`}>
+																	{notif.type}
+																</span>
+																<span className="notification-time-compact">
+																	{new Date(notif.timestamp).toLocaleString()}
+																</span>
+															</div>
+															<h4 className="notification-title-compact">{notif.title}{notif.year && ` (${notif.year})`}</h4>
+															{notif.episodes && notif.episodes.length > 0 && (
+																<p className="notification-episodes-compact">
+																	{notif.episodes.length === 1 
+																		? `S${notif.episodes[0].season.toString().padStart(2, '0')}E${notif.episodes[0].number.toString().padStart(2, '0')}: ${notif.episodes[0].title}`
+																		: `${notif.episodes.length} episodes imported`}
 																</p>
 															)}
-															{notif.quality && (
-																<p className="notification-quality">
-																	Quality: {notif.quality}
+															{notif.episode && !notif.episodes && (
+																<p className="notification-episodes-compact">
+																	S{notif.episode.season.toString().padStart(2, '0')}E
+																	{notif.episode.number.toString().padStart(2, '0')}: {notif.episode.title}
 																</p>
 															)}
 														</div>
 													</div>
-												</div>
-											))
-										)}
+												))
+											)}
+										</div>
 									</div>
 								</div>
 							</div>
+						</div>
+					)}
+
+					{activeView === 'configure' && (
+						<div className="view-content configure-view">
+							<SettingsModal
+								isOpen={true}
+								onClose={() => setActiveView('dashboard')}
+								status={status}
+								embedded={true}
+							/>
 						</div>
 					)}
 				</main>
@@ -796,11 +750,6 @@ function App() {
 				</div>
 			</Modal>
 
-			<SettingsModal
-				isOpen={showSettings}
-				onClose={() => setShowSettings(false)}
-				status={status}
-			/>
 
 			<Modal
 				isOpen={showBrowseModal}

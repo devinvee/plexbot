@@ -351,6 +351,222 @@ body {
 	padding: 2rem;
 }
 
+.configure-view {
+	padding: 0;
+}
+
+.settings-embedded {
+	width: 100%;
+}
+
+.settings-content {
+	padding: 1.5rem;
+}
+
+/* Activity Grid */
+.activity-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+	gap: 1.5rem;
+}
+
+/* Compact Lists */
+.scans-list-compact,
+.activities-list-compact,
+.notifications-list-compact {
+	display: flex;
+	flex-direction: column;
+	gap: 0.75rem;
+	max-height: 400px;
+	overflow-y: auto;
+}
+
+.scan-item-compact,
+.activity-item-compact,
+.notification-item-compact {
+	display: flex;
+	align-items: center;
+	gap: 0.75rem;
+	padding: 0.75rem;
+	background: var(--bg-tertiary);
+	border: 1px solid var(--border);
+	border-radius: 0.5rem;
+	transition: all 0.2s;
+}
+
+.scan-item-compact:hover,
+.activity-item-compact:hover,
+.notification-item-compact:hover {
+	background: var(--bg-primary);
+	border-color: var(--accent);
+}
+
+.scan-info-compact,
+.activity-info-compact,
+.notification-info-compact {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	gap: 0.25rem;
+	min-width: 0;
+}
+
+.scan-name-compact,
+.activity-title-compact,
+.notification-title-compact {
+	font-weight: 500;
+	color: var(--text-primary);
+	font-size: 0.875rem;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.scan-type-compact,
+.activity-subtitle-compact,
+.notification-episodes-compact {
+	font-size: 0.75rem;
+	color: var(--text-secondary);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.scan-status-compact {
+	font-size: 1.25rem;
+	flex-shrink: 0;
+}
+
+.scan-status-compact.pending {
+	color: #f59e0b;
+}
+
+.scan-status-compact.completed {
+	color: var(--success);
+}
+
+.scan-status-compact.failed {
+	color: var(--error);
+}
+
+.activity-progress-compact {
+	position: relative;
+	width: 60px;
+	height: 20px;
+	background: var(--bg-primary);
+	border-radius: 10px;
+	overflow: hidden;
+	flex-shrink: 0;
+}
+
+.activity-progress-bar-compact {
+	height: 100%;
+	background: var(--accent);
+	transition: width 0.3s ease;
+	border-radius: 10px;
+}
+
+.activity-progress-text {
+	position: absolute;
+	top: 50%;
+	left: 50%;
+	transform: translate(-50%, -50%);
+	font-size: 0.625rem;
+	font-weight: 600;
+	color: var(--text-primary);
+	z-index: 1;
+}
+
+.notification-image-compact {
+	width: 50px;
+	height: 75px;
+	flex-shrink: 0;
+	border-radius: 0.25rem;
+	overflow: hidden;
+	background: var(--bg-primary);
+}
+
+.notification-image-compact img {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+}
+
+.notification-header-compact {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	gap: 0.5rem;
+	margin-bottom: 0.25rem;
+}
+
+.notification-type-compact {
+	font-size: 0.625rem;
+	text-transform: uppercase;
+	padding: 0.125rem 0.375rem;
+	border-radius: 0.25rem;
+	font-weight: 600;
+	background: var(--bg-primary);
+	color: var(--text-secondary);
+}
+
+.notification-time-compact {
+	font-size: 0.625rem;
+	color: var(--text-secondary);
+	white-space: nowrap;
+}
+
+.more-items {
+	text-align: center;
+	padding: 0.75rem;
+	color: var(--text-secondary);
+	font-size: 0.875rem;
+	font-style: italic;
+}
+
+.empty-state-compact {
+	text-align: center;
+	padding: 2rem 1rem;
+	color: var(--text-secondary);
+	font-size: 0.875rem;
+}
+
+.notifications-controls-compact {
+	display: flex;
+	gap: 0.5rem;
+	align-items: center;
+}
+
+.notification-search-compact {
+	padding: 0.5rem 0.75rem;
+	background: var(--bg-tertiary);
+	border: 1px solid var(--border);
+	border-radius: 0.5rem;
+	color: var(--text-primary);
+	font-size: 0.75rem;
+	width: 150px;
+}
+
+.notification-search-compact:focus {
+	outline: none;
+	border-color: var(--accent);
+}
+
+.notification-filter-compact {
+	padding: 0.5rem 0.75rem;
+	background: var(--bg-tertiary);
+	border: 1px solid var(--border);
+	border-radius: 0.5rem;
+	color: var(--text-primary);
+	font-size: 0.75rem;
+	cursor: pointer;
+}
+
+.notification-filter-compact:focus {
+	outline: none;
+	border-color: var(--accent);
+}
+
 .scans-list-full,
 .activities-list-full,
 .notifications-list-full {
