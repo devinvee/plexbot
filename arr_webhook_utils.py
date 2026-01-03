@@ -409,25 +409,61 @@ def setup_webhook_for_instance(arr_url: str, arr_api_key: str, bot_url: str, arr
         result["message"] = f"Connection successful. Webhook URL: {webhook_url}"
         return result
 
-    # Check if webhook already exists
-    existing = get_existing_webhook(
+    # Check if webhook already exists with the same URL
+    existing_by_url = get_existing_webhook(
         arr_url, arr_api_key, webhook_url, arr_type)
-    if existing:
-        result["success"] = True
-        result["message"] = f"Connection successful. Webhook already exists."
-        result["webhook_created"] = False
+    if existing_by_url:
+        # Update existing webhook to ensure it's configured correctly
+        update_result = update_webhook(
+            arr_url, arr_api_key, existing_by_url.get('id'), webhook_url, arr_type, name
+        )
+        if update_result["success"]:
+            result["success"] = True
+            result["message"] = "Connection successful. Webhook already exists and was updated."
+            result["webhook_created"] = False
+            result["webhook_updated"] = True
+        else:
+            result["success"] = True
+            result["message"] = f"Connection successful. Webhook exists but update failed: {update_result['message']}"
+            result["webhook_created"] = False
+            result["webhook_updated"] = False
         return result
 
-    # Create webhook
-    webhook_result = create_webhook(
-        arr_url, arr_api_key, webhook_url, arr_type, name)
-    result["webhook_created"] = webhook_result["success"]
-
-    if webhook_result["success"]:
-        result["success"] = True
-        result["message"] = f"Connection successful and webhook created."
+    # Check if a webhook with the same name exists (but different URL)
+    webhook_name = name or "Plexbot"
+    existing_by_name = get_webhook_by_name(arr_url, arr_api_key, webhook_name, arr_type)
+    if existing_by_name:
+        # Update the existing webhook with the same name to use our URL
+        update_result = update_webhook(
+            arr_url, arr_api_key, existing_by_name.get('id'), webhook_url, arr_type, name
+        )
+        if update_result["success"]:
+            result["success"] = True
+            result["message"] = "Connection successful. Updated existing webhook with new URL."
+            result["webhook_created"] = False
+            result["webhook_updated"] = True
+        else:
+            # If update fails, try creating with a unique name
+            unique_name = f"{webhook_name} ({arr_type.capitalize()})"
+            webhook_result = create_webhook(arr_url, arr_api_key, webhook_url, arr_type, unique_name)
+            result["webhook_created"] = webhook_result["success"]
+            if webhook_result["success"]:
+                result["success"] = True
+                result["message"] = f"Connection successful and webhook created as '{unique_name}'."
+            else:
+                result["success"] = False
+                result["message"] = f"Connection successful but webhook creation failed: {webhook_result['message']}"
     else:
-        result["success"] = False
-        result["message"] = f"Connection successful but webhook creation failed: {webhook_result['message']}"
+        # Create new webhook
+        webhook_result = create_webhook(
+            arr_url, arr_api_key, webhook_url, arr_type, name)
+        result["webhook_created"] = webhook_result["success"]
+
+        if webhook_result["success"]:
+            result["success"] = True
+            result["message"] = "Connection successful and webhook created."
+        else:
+            result["success"] = False
+            result["message"] = f"Connection successful but webhook creation failed: {webhook_result['message']}"
 
     return result
