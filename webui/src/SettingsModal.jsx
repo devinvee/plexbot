@@ -673,7 +673,6 @@ export default function SettingsModal({ isOpen, onClose, status, embedded = fals
 						<div className="error">Failed to load configuration</div>
 					)}
 				</div>
-			</div>
 		</>
 	);
 

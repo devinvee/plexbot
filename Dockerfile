@@ -1,5 +1,5 @@
 # Stage 1: Build the webui
-FROM node:18-slim AS webui-builder
+FROM node:20-slim AS webui-builder
 
 WORKDIR /build
 
