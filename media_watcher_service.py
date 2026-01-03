@@ -890,7 +890,54 @@ def api_update_settings():
         })
     except Exception as e:
         logger.error(f"Error updating settings: {e}", exc_info=True)
-        return jsonify({"success": False, "message": str(e)}), 500
+        return jsonify({"success": False, "message": str(e)        }), 500
+
+
+@app.route('/api/arr/test-instance', methods=['POST'])
+def api_test_arr_instance():
+    """Test an ARR instance connection and optionally create webhook."""
+    try:
+        data = request.json
+        arr_type = data.get('type', 'sonarr')  # sonarr, radarr, or readarr
+        arr_url = data.get('url', '').strip()
+        arr_api_key = data.get('api_key', '').strip()
+        instance_name = data.get('name', '')
+        auto_create_webhook = data.get('auto_create_webhook', True)
+        
+        if not arr_url or not arr_api_key:
+            return jsonify({
+                "success": False,
+                "message": "URL and API key are required"
+            }), 400
+        
+        # Get bot URL from request (use the host from the request)
+        # For production, you might want to set this in environment variable
+        bot_url = request.host_url.rstrip('/')
+        # Try to get from environment if available
+        import os
+        bot_url_env = os.getenv('BOT_URL') or os.getenv('WEBHOOK_BASE_URL')
+        if bot_url_env:
+            bot_url = bot_url_env.rstrip('/')
+        
+        from arr_webhook_utils import setup_webhook_for_instance
+        
+        result = setup_webhook_for_instance(
+            arr_url=arr_url,
+            arr_api_key=arr_api_key,
+            bot_url=bot_url,
+            arr_type=arr_type,
+            name=instance_name or f"PlexBot {arr_type.capitalize()} Webhook",
+            auto_create=auto_create_webhook
+        )
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        logger.error(f"Error testing ARR instance: {e}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "message": f"Error: {str(e)}"
+        }), 500
 
 
 @app.route('/api/plex/scan', methods=['POST'])

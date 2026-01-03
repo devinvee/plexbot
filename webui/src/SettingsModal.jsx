@@ -9,6 +9,8 @@ export default function SettingsModal({ isOpen, onClose, status, embedded = fals
 	const [saving, setSaving] = useState(false);
 	const [result, setResult] = useState(null);
 	const [loading, setLoading] = useState(true);
+	const [testingInstance, setTestingInstance] = useState(null);
+	const [testResults, setTestResults] = useState({});
 
 	useEffect(() => {
 		if (isOpen) {
@@ -112,6 +114,41 @@ export default function SettingsModal({ isOpen, onClose, status, embedded = fals
 
 		current.splice(index, 1);
 		setConfig(newConfig);
+	};
+
+	const testArrInstance = async (arrType, instance, index) => {
+		const testKey = `${arrType}-${index}`;
+		setTestingInstance(testKey);
+		setTestResults(prev => ({ ...prev, [testKey]: null }));
+
+		try {
+			const response = await fetch(`${API_BASE}/arr/test-instance`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					type: arrType,
+					url: instance.url,
+					api_key: instance.api_key,
+					name: instance.name || `${arrType} Instance ${index + 1}`,
+					auto_create_webhook: true
+				}),
+			});
+
+			const data = await response.json();
+			setTestResults(prev => ({ ...prev, [testKey]: data }));
+			
+			if (data.success) {
+				setResult({ success: true, message: data.message });
+			} else {
+				setResult({ success: false, error: data.message });
+			}
+		} catch (error) {
+			const errorData = { success: false, message: `Failed to test: ${error.message}` };
+			setTestResults(prev => ({ ...prev, [testKey]: errorData }));
+			setResult({ success: false, error: errorData.message });
+		} finally {
+			setTestingInstance(null);
+		}
 	};
 
 	if (!isOpen) return null;
@@ -295,14 +332,34 @@ export default function SettingsModal({ isOpen, onClose, status, embedded = fals
 											config.sonarr_instances.map((instance, index) => (
 												<div key={index} className="array-item">
 													<div className="array-item-header">
-														<h4>Instance {index + 1}</h4>
-														<button
-															className="btn btn-danger btn-small"
-															onClick={() => removeArrayItem('sonarr_instances', index)}
-														>
-															Remove
-														</button>
+														<h4>{instance.name || `Instance ${index + 1}`}</h4>
+														<div style={{ display: 'flex', gap: '0.5rem' }}>
+															<button
+																className="btn btn-secondary btn-small"
+																onClick={() => testArrInstance('sonarr', instance, index)}
+																disabled={testingInstance === `sonarr-${index}` || !instance.url || !instance.api_key}
+																title="Test connection and create webhook"
+															>
+																{testingInstance === `sonarr-${index}` ? 'Testing...' : 'Test & Setup Webhook'}
+															</button>
+															<button
+																className="btn btn-danger btn-small"
+																onClick={() => removeArrayItem('sonarr_instances', index)}
+															>
+																Remove
+															</button>
+														</div>
 													</div>
+													{testResults[`sonarr-${index}`] && (
+														<div className={`settings-result ${testResults[`sonarr-${index}`].success ? 'success' : 'error'}`} style={{ marginBottom: '1rem' }}>
+															{testResults[`sonarr-${index}`].message}
+															{testResults[`sonarr-${index}`].webhook_url && (
+																<div style={{ fontSize: '0.75rem', marginTop: '0.25rem', opacity: 0.8 }}>
+																	Webhook: {testResults[`sonarr-${index}`].webhook_url}
+																</div>
+															)}
+														</div>
+													)}
 													<SettingItem label="Name" description="Display name for this Sonarr instance">
 														<input
 															type="text"
@@ -385,14 +442,34 @@ export default function SettingsModal({ isOpen, onClose, status, embedded = fals
 											config.radarr_instances.map((instance, index) => (
 												<div key={index} className="array-item">
 													<div className="array-item-header">
-														<h4>Instance {index + 1}</h4>
-														<button
-															className="btn btn-danger btn-small"
-															onClick={() => removeArrayItem('radarr_instances', index)}
-														>
-															Remove
-														</button>
+														<h4>{instance.name || `Instance ${index + 1}`}</h4>
+														<div style={{ display: 'flex', gap: '0.5rem' }}>
+															<button
+																className="btn btn-secondary btn-small"
+																onClick={() => testArrInstance('radarr', instance, index)}
+																disabled={testingInstance === `radarr-${index}` || !instance.url || !instance.api_key}
+																title="Test connection and create webhook"
+															>
+																{testingInstance === `radarr-${index}` ? 'Testing...' : 'Test & Setup Webhook'}
+															</button>
+															<button
+																className="btn btn-danger btn-small"
+																onClick={() => removeArrayItem('radarr_instances', index)}
+															>
+																Remove
+															</button>
+														</div>
 													</div>
+													{testResults[`radarr-${index}`] && (
+														<div className={`settings-result ${testResults[`radarr-${index}`].success ? 'success' : 'error'}`} style={{ marginBottom: '1rem' }}>
+															{testResults[`radarr-${index}`].message}
+															{testResults[`radarr-${index}`].webhook_url && (
+																<div style={{ fontSize: '0.75rem', marginTop: '0.25rem', opacity: 0.8 }}>
+																	Webhook: {testResults[`radarr-${index}`].webhook_url}
+																</div>
+															)}
+														</div>
+													)}
 													<SettingItem label="Name" description="Display name for this Radarr instance">
 														<input
 															type="text"
