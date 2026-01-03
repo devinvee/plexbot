@@ -2,6 +2,8 @@
 
 This guide explains how to run PlexBot locally for development without waiting for Docker builds.
 
+**For a complete development workflow, see [WORKFLOW.md](WORKFLOW.md)**
+
 ## Quick Start
 
 ### Option 1: Use the Dev Script (Recommended)
