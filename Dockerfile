@@ -26,10 +26,13 @@ COPY cogs/ ./cogs/
 # This pattern excludes the redundant *_functions.py files
 COPY *_utils.py ./
 
-# 3. Copy the main bot application files
+# 3. Copy database and notification modules
+COPY notification_db.py ./
+
+# 4. Copy the main bot application files
 COPY bot.py config.py utils.py media_watcher_service.py __init__.py ./
 
-# 4. Copy the built webui from the builder stage
+# 5. Copy the built webui from the builder stage
 COPY --from=webui-builder /build/dist ./webui/dist
 
 CMD ["python", "bot.py"]
