@@ -41,13 +41,16 @@ function App() {
 	const [loadingItems, setLoadingItems] = useState(false);
 	const [scanningAll, setScanningAll] = useState(false);
 	const [scanAllProgress, setScanAllProgress] = useState(null);
+	const [pendingScans, setPendingScans] = useState([]);
 
 	useEffect(() => {
 		fetchStatus();
 		fetchNotifications();
+		fetchPendingScans();
 		const interval = setInterval(() => {
 			fetchStatus();
 			fetchNotifications();
+			fetchPendingScans();
 		}, 5000); // Refresh every 5 seconds
 		return () => clearInterval(interval);
 	}, []);
@@ -115,14 +118,29 @@ function App() {
 		fetchLibraryItems(library.key);
 	};
 
+	const fetchPendingScans = async () => {
+		try {
+			const response = await fetch(`${API_BASE}/plex/pending-scans`);
+			const data = await response.json();
+			if (data.success) {
+				setPendingScans(data.pending_scans || []);
+			}
+		} catch (error) {
+			console.error('Failed to fetch pending scans:', error);
+		}
+	};
+
 	const handleItemScan = async (item) => {
 		try {
 			console.log(`Scanning item: ${item.title} (key: ${item.key})`);
-			// Send item_key in request body to avoid URL encoding issues
+			// Send item_key and item_name in request body
 			const response = await fetch(`${API_BASE}/plex/item/scan`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ item_key: item.key }),
+				body: JSON.stringify({ 
+					item_key: item.key,
+					item_name: item.title
+				}),
 			});
 			
 			if (!response.ok) {
@@ -141,6 +159,8 @@ function App() {
 			const data = await response.json();
 			console.log('Scan response:', data);
 			if (data.success) {
+				// Refresh pending scans
+				fetchPendingScans();
 				alert(`Successfully triggered scan for ${item.title}!`);
 				setShowBrowseModal(false);
 				setSelectedLibrary(null);
@@ -237,6 +257,7 @@ function App() {
 									});
 									const data = await response.json();
 									setScanAllProgress(data);
+									fetchPendingScans(); // Refresh pending scans
 									if (data.success) {
 										alert(`Successfully scanned ${data.scanned} of ${data.total} libraries!`);
 									} else {
@@ -281,6 +302,33 @@ function App() {
 						</div>
 					)}
 				</section>
+
+				{pendingScans.length > 0 && (
+					<section className="pending-scans-section">
+						<h2>Pending Scans</h2>
+						<div className="pending-scans-list">
+							{pendingScans.map((scan) => (
+								<div key={scan.scan_id} className="pending-scan-card">
+									<div className="pending-scan-header">
+										<div className="pending-scan-info">
+											<span className="pending-scan-type">{scan.type}</span>
+											<span className="pending-scan-name">{scan.name}</span>
+										</div>
+										<span className={`pending-scan-status ${scan.status}`}>
+											{scan.status === 'pending' ? '⏳ Pending' : scan.status === 'completed' ? '✓ Completed' : '✗ Failed'}
+										</span>
+									</div>
+									<div className="pending-scan-time">
+										Started: {new Date(scan.timestamp).toLocaleString()}
+										{scan.completed_at && (
+											<span> • Completed: {new Date(scan.completed_at).toLocaleString()}</span>
+										)}
+									</div>
+								</div>
+							))}
+						</div>
+					</section>
+				)}
 
 				<section className="status-section">
 					<h2>System Status</h2>

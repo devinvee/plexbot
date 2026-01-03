@@ -1076,3 +1076,80 @@ body {
 	font-size: 0.75rem;
 	color: var(--text-secondary);
 }
+
+/* Pending Scans Section */
+.pending-scans-section {
+	background: var(--bg-secondary);
+	border-radius: 1rem;
+	padding: 1.5rem;
+	border: 1px solid var(--border);
+	margin-bottom: 2rem;
+}
+
+.pending-scans-section h2 {
+	margin-bottom: 1rem;
+	font-size: 1.5rem;
+}
+
+.pending-scans-list {
+	display: flex;
+	flex-direction: column;
+	gap: 0.75rem;
+}
+
+.pending-scan-card {
+	background: var(--bg-tertiary);
+	border: 1px solid var(--border);
+	border-radius: 0.5rem;
+	padding: 1rem;
+}
+
+.pending-scan-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin-bottom: 0.5rem;
+}
+
+.pending-scan-info {
+	display: flex;
+	align-items: center;
+	gap: 0.75rem;
+}
+
+.pending-scan-type {
+	font-size: 0.75rem;
+	text-transform: uppercase;
+	color: var(--text-secondary);
+	background: var(--bg-primary);
+	padding: 0.25rem 0.5rem;
+	border-radius: 0.25rem;
+	font-weight: 600;
+}
+
+.pending-scan-name {
+	font-weight: 500;
+	color: var(--text-primary);
+}
+
+.pending-scan-status {
+	font-size: 0.875rem;
+	font-weight: 500;
+}
+
+.pending-scan-status.pending {
+	color: #f59e0b;
+}
+
+.pending-scan-status.completed {
+	color: var(--success);
+}
+
+.pending-scan-status.failed {
+	color: var(--error);
+}
+
+.pending-scan-time {
+	font-size: 0.875rem;
+	color: var(--text-secondary);
+}

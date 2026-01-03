@@ -3,6 +3,7 @@ Media watcher service for the Plex Discord Bot.
 """
 import asyncio
 import logging
+import uuid
 from collections import deque, defaultdict
 from datetime import datetime
 from flask import Flask, request, jsonify, send_from_directory
@@ -34,10 +35,81 @@ NOTIFIED_MOVIES_CACHE: Deque[tuple] = deque(maxlen=1000)
 OVERSEERR_USERS_DATA: Dict[str, dict] = {}
 NOTIFICATION_HISTORY: Deque[Dict[str, Any]] = deque(
     maxlen=100)  # Store last 100 notifications
+PENDING_SCANS: Dict[str, Dict[str, Any]] = {}  # Track pending scans by scan_id
 
 DEBOUNCE_SECONDS = 60
 
 app = Flask(__name__)
+
+
+def add_pending_scan(scan_type: str, scan_id: str, name: str, library_key: str = None, item_key: str = None):
+    """Add a scan to the pending scans list."""
+    PENDING_SCANS[scan_id] = {
+        "scan_id": scan_id,
+        "type": scan_type,  # 'library', 'item', 'all_libraries'
+        "name": name,
+        "library_key": library_key,
+        "item_key": item_key,
+        "status": "pending",
+        "timestamp": datetime.now().isoformat(),
+        "checked_at": datetime.now().isoformat()
+    }
+    logger.info(f"Added pending scan: {scan_id} ({scan_type}) - {name}")
+
+
+def check_scan_status(scan_id: str) -> str:
+    """Check if a scan is still pending or completed."""
+    if scan_id not in PENDING_SCANS:
+        return "unknown"
+    
+    scan_info = PENDING_SCANS[scan_id]
+    scan_type = scan_info.get("type")
+    library_key = scan_info.get("library_key")
+    
+    if scan_type == "library" and library_key:
+        # Check if library is still scanning
+        from plex_utils import is_plex_scanning
+        try:
+            section_id = int(library_key)
+            is_scanning = is_plex_scanning(section_id)
+            if not is_scanning:
+                # Scan likely completed
+                scan_info["status"] = "completed"
+                scan_info["completed_at"] = datetime.now().isoformat()
+                return "completed"
+            return "pending"
+        except Exception as e:
+            logger.warning(f"Error checking scan status for {scan_id}: {e}")
+            # Assume completed after a timeout period
+            scan_timestamp = datetime.fromisoformat(scan_info["timestamp"])
+            time_since_scan = (datetime.now() - scan_timestamp).total_seconds()
+            if time_since_scan > 300:  # 5 minutes
+                scan_info["status"] = "completed"
+                scan_info["completed_at"] = datetime.now().isoformat()
+                return "completed"
+            return "pending"
+    elif scan_type == "all_libraries":
+        # For all libraries scan, mark as completed after a reasonable time
+        scan_timestamp = datetime.fromisoformat(scan_info["timestamp"])
+        time_since_scan = (datetime.now() - scan_timestamp).total_seconds()
+        # Assume completed after 10 minutes for all libraries
+        if time_since_scan > 600:
+            scan_info["status"] = "completed"
+            scan_info["completed_at"] = datetime.now().isoformat()
+            return "completed"
+        return "pending"
+    else:
+        # For item scans, check the library status
+        if library_key:
+            return check_scan_status(f"library_{library_key}")
+        # Default: assume completed after 5 minutes
+        scan_timestamp = datetime.fromisoformat(scan_info["timestamp"])
+        time_since_scan = (datetime.now() - scan_timestamp).total_seconds()
+        if time_since_scan > 300:
+            scan_info["status"] = "completed"
+            scan_info["completed_at"] = datetime.now().isoformat()
+            return "completed"
+        return "pending"
 
 # --- Core Notification Logic ---
 
@@ -822,6 +894,9 @@ def api_plex_scan():
 def api_plex_scan_all():
     """Sequentially scans all Plex libraries, waiting for each to complete."""
     try:
+        scan_id = f"all_libraries_{uuid.uuid4().hex[:8]}"
+        add_pending_scan("all_libraries", scan_id, "All Libraries")
+        
         bot_instance = app.config.get('discord_bot')
         if not bot_instance:
             return jsonify({"success": False, "message": "Bot instance not available"}), 500
@@ -837,6 +912,7 @@ def api_plex_scan_all():
         else:
             result = asyncio.run(scan_all_libraries_sequential_async())
 
+        result["scan_id"] = scan_id
         return jsonify(result)
 
     except Exception as e:
@@ -895,19 +971,38 @@ def api_plex_item_scan():
     try:
         data = request.json or {}
         item_key = data.get('item_key')
-        
+        item_name = data.get('item_name', 'Unknown Item')
+
         if not item_key:
             return jsonify({
                 "success": False,
                 "message": "Missing item_key in request body"
             }), 400
-        
+
         logger.info(f"Received scan request for item key: {item_key}")
-        
+
         bot_instance = app.config.get('discord_bot')
         if not bot_instance:
             logger.error("Bot instance not available for item scan")
             return jsonify({"success": False, "message": "Bot instance not available"}), 500
+
+        # Get library key from item if possible
+        library_key = None
+        try:
+            from plex_utils import get_plex_client
+            plex = get_plex_client()
+            if plex:
+                item = plex.fetchItem(item_key)
+                if item:
+                    section = item.section()
+                    if section:
+                        library_key = str(section.key)
+        except Exception as e:
+            logger.warning(f"Could not determine library for item: {e}")
+
+        # Create scan ID and add to pending scans
+        scan_id = f"item_{uuid.uuid4().hex[:8]}"
+        add_pending_scan("item", scan_id, item_name, library_key=library_key, item_key=item_key)
 
         logger.info(f"Starting async scan for item: {item_key}")
         # Run scan in async context
@@ -933,10 +1028,14 @@ def api_plex_item_scan():
         if result:
             return jsonify({
                 "success": True,
-                "message": "Successfully triggered Plex scan for item"
+                "message": "Successfully triggered Plex scan for item",
+                "scan_id": scan_id
             })
         else:
             logger.warning(f"Scan returned False for item: {item_key}")
+            # Remove from pending if it failed
+            if scan_id in PENDING_SCANS:
+                PENDING_SCANS[scan_id]["status"] = "failed"
             return jsonify({
                 "success": False,
                 "message": "Failed to trigger Plex scan for item. Check server logs for details."
@@ -948,6 +1047,45 @@ def api_plex_item_scan():
         return jsonify({
             "success": False,
             "message": f"Error: {str(e)}"
+        }), 500
+
+
+@app.route('/api/plex/pending-scans', methods=['GET'])
+def api_pending_scans():
+    """Gets the list of pending scans."""
+    try:
+        # Update status for all pending scans
+        for scan_id in list(PENDING_SCANS.keys()):
+            scan_info = PENDING_SCANS[scan_id]
+            if scan_info.get("status") == "pending":
+                check_scan_status(scan_id)  # Updates status internally
+                scan_info["checked_at"] = datetime.now().isoformat()
+        
+        # Filter out completed scans older than 1 hour
+        now = datetime.now()
+        active_scans = []
+        for scan_id, scan_info in PENDING_SCANS.items():
+            if scan_info.get("status") == "completed":
+                completed_at = scan_info.get("completed_at")
+                if completed_at:
+                    completed_time = datetime.fromisoformat(completed_at)
+                    if (now - completed_time).total_seconds() > 3600:  # 1 hour
+                        continue
+            active_scans.append(scan_info)
+        
+        # Sort by timestamp, newest first
+        active_scans.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+        
+        return jsonify({
+            "success": True,
+            "pending_scans": active_scans
+        })
+    except Exception as e:
+        logger.error(f"Error getting pending scans: {e}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "message": f"Error: {str(e)}",
+            "pending_scans": []
         }), 500
 
 # --- Service Setup ---
