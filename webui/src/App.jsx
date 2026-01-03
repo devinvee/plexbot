@@ -43,6 +43,8 @@ function App() {
 	const [scanAllProgress, setScanAllProgress] = useState(null);
 	const [pendingScans, setPendingScans] = useState([]);
 	const [plexActivities, setPlexActivities] = useState([]);
+	const [activeView, setActiveView] = useState('dashboard');
+	const [sidebarOpen, setSidebarOpen] = useState(true);
 
 	useEffect(() => {
 		fetchStatus();
@@ -247,364 +249,495 @@ function App() {
 	}
 
 	return (
-		<div className="app-container">
-			<header className="app-header">
-				<h1>PlexBot Dashboard</h1>
-				<div className="header-actions">
-					<button
-						className="btn btn-primary"
-						onClick={() => setShowScanModal(true)}
+		<div className="app-wrapper">
+			{/* Sidebar Navigation */}
+			<aside className={`sidebar ${sidebarOpen ? 'open' : 'closed'}`}>
+				<div className="sidebar-header">
+					<h1 className="sidebar-logo">PlexBot</h1>
+					<button 
+						className="sidebar-toggle"
+						onClick={() => setSidebarOpen(!sidebarOpen)}
+						aria-label="Toggle sidebar"
 					>
-						Scan Plex Library
-					</button>
-					<button
-						className="btn btn-secondary"
-						onClick={() => setShowSettings(true)}
-					>
-						Settings
+						{sidebarOpen ? '←' : '→'}
 					</button>
 				</div>
-			</header>
+				
+				<nav className="sidebar-nav">
+					<button
+						className={`nav-item ${activeView === 'dashboard' ? 'active' : ''}`}
+						onClick={() => setActiveView('dashboard')}
+					>
+						<span className="nav-icon">🏠</span>
+						{sidebarOpen && <span className="nav-label">Dashboard</span>}
+					</button>
+					<button
+						className={`nav-item ${activeView === 'scans' ? 'active' : ''}`}
+						onClick={() => setActiveView('scans')}
+					>
+						<span className="nav-icon">📊</span>
+						{sidebarOpen && <span className="nav-label">Scans</span>}
+					</button>
+					<button
+						className={`nav-item ${activeView === 'notifications' ? 'active' : ''}`}
+						onClick={() => setActiveView('notifications')}
+					>
+						<span className="nav-icon">🔔</span>
+						{sidebarOpen && <span className="nav-label">Notifications</span>}
+					</button>
+					<button
+						className={`nav-item ${activeView === 'activities' ? 'active' : ''}`}
+						onClick={() => setActiveView('activities')}
+					>
+						<span className="nav-icon">⚡</span>
+						{sidebarOpen && <span className="nav-label">Activities</span>}
+					</button>
+				</nav>
 
-			<main className="app-main">
-				<section className="quick-actions-section">
-					<h2>Quick Actions</h2>
-					<div className="quick-actions-grid">
-						<button
-							className="quick-action-btn"
-							onClick={async () => {
-								setScanningAll(true);
-								setScanAllProgress(null);
-								try {
-									const response = await fetch(`${API_BASE}/plex/scan-all`, {
-										method: 'POST',
-										headers: { 'Content-Type': 'application/json' },
-									});
-									const data = await response.json();
-									setScanAllProgress(data);
-									fetchPendingScans(); // Refresh pending scans
-									if (data.success) {
-										alert(`Successfully scanned ${data.scanned} of ${data.total} libraries!`);
-									} else {
-										alert(`Scan completed with issues: ${data.message || 'Some libraries failed to scan'}`);
-									}
-								} catch (error) {
-									alert('Failed to trigger scan');
-								} finally {
-									setScanningAll(false);
-								}
-							}}
-							disabled={scanningAll}
-						>
-							<div className="quick-action-icon">📚</div>
-							<div className="quick-action-label">
-								{scanningAll ? 'Scanning...' : 'Scan All Libraries'}
-							</div>
-						</button>
-						<button
-							className="quick-action-btn"
-							onClick={() => {
-								setShowBrowseModal(true);
-								fetchLibraries();
-							}}
-						>
-							<div className="quick-action-icon">🎬</div>
-							<div className="quick-action-label">Scan a Show/Movie</div>
-						</button>
+				<div className="sidebar-footer">
+					<button
+						className="nav-item"
+						onClick={() => setShowSettings(true)}
+					>
+						<span className="nav-icon">⚙️</span>
+						{sidebarOpen && <span className="nav-label">Settings</span>}
+					</button>
+				</div>
+			</aside>
+
+			{/* Main Content Area */}
+			<div className="main-content">
+				<header className="top-header">
+					<div className="header-left">
+						<h2 className="page-title">
+							{activeView === 'dashboard' && 'Dashboard'}
+							{activeView === 'scans' && 'Scans'}
+							{activeView === 'notifications' && 'Notifications'}
+							{activeView === 'activities' && 'Plex Activities'}
+						</h2>
 					</div>
-					{scanAllProgress && (
-						<div className="scan-progress">
-							<p>Progress: {scanAllProgress.scanned} / {scanAllProgress.total} libraries scanned</p>
-							{scanAllProgress.results && (
-								<ul className="scan-results-list">
-									{scanAllProgress.results.map((result, idx) => (
-										<li key={idx} className={result.success ? 'success' : 'error'}>
-											{result.library}: {result.success ? '✓' : '✗'} {result.message || ''}
-										</li>
-									))}
-								</ul>
+					<div className="header-right">
+						<div className="header-actions">
+							{activeView === 'dashboard' && (
+								<>
+									<button
+										className="btn btn-primary"
+										onClick={async () => {
+											setScanningAll(true);
+											setScanAllProgress(null);
+											try {
+												const response = await fetch(`${API_BASE}/plex/scan-all`, {
+													method: 'POST',
+													headers: { 'Content-Type': 'application/json' },
+												});
+												const data = await response.json();
+												setScanAllProgress(data);
+												fetchPendingScans();
+												if (data.success) {
+													alert(`Successfully scanned ${data.scanned} of ${data.total} libraries!`);
+												} else {
+													alert(`Scan completed with issues: ${data.message || 'Some libraries failed to scan'}`);
+												}
+											} catch (error) {
+												alert('Failed to trigger scan');
+											} finally {
+												setScanningAll(false);
+											}
+										}}
+										disabled={scanningAll}
+									>
+										{scanningAll ? 'Scanning...' : 'Scan All Libraries'}
+									</button>
+									<button
+										className="btn btn-secondary"
+										onClick={() => {
+											setShowBrowseModal(true);
+											fetchLibraries();
+										}}
+									>
+										Scan Show/Movie
+									</button>
+								</>
 							)}
-						</div>
-					)}
-				</section>
-
-				<section className="pending-scans-section">
-					<div className="section-header-with-refresh">
-						<h2>Pending Scans</h2>
-						<button
-							className="btn btn-secondary btn-small"
-							onClick={() => {
-								fetchPendingScans();
-								fetchPlexActivities();
-							}}
-							title="Refresh scan status"
-						>
-							🔄 Refresh
-						</button>
-					</div>
-					{pendingScans.length > 0 ? (
-						<div className="pending-scans-list">
-							{pendingScans.map((scan) => (
-								<div key={scan.scan_id} className="pending-scan-card">
-									<div className="pending-scan-header">
-										<div className="pending-scan-info">
-											<span className="pending-scan-type">{scan.type}</span>
-											<span className="pending-scan-name">{scan.name}</span>
-										</div>
-										<span className={`pending-scan-status ${scan.status}`}>
-											{scan.status === 'pending' ? '⏳ Pending' : scan.status === 'completed' ? '✓ Completed' : '✗ Failed'}
-										</span>
-									</div>
-									<div className="pending-scan-time">
-										Started: {new Date(scan.timestamp).toLocaleString()}
-										{scan.completed_at && (
-											<span> • Completed: {new Date(scan.completed_at).toLocaleString()}</span>
-										)}
-									</div>
-								</div>
-							))}
-						</div>
-					) : (
-						<div className="empty-state">
-							No pending scans. Trigger a scan to see it here.
-						</div>
-					)}
-				</section>
-
-				{plexActivities.length > 0 && (
-					<section className="plex-activities-section">
-						<div className="section-header-with-refresh">
-							<h2>Plex Activities & Queued Scans</h2>
 							<button
-								className="btn btn-secondary btn-small"
+								className="btn btn-secondary"
 								onClick={() => {
-									fetchPlexActivities();
+									fetchStatus();
+									fetchNotifications();
 									fetchPendingScans();
+									fetchPlexActivities();
 								}}
-								title="Refresh activities"
+								title="Refresh all data"
 							>
 								🔄 Refresh
 							</button>
 						</div>
-						<div className="activities-list">
-							{plexActivities.map((activity, idx) => (
-								<div key={activity.uuid || idx} className="activity-card">
-									<div className="activity-header">
-										<div className="activity-info">
-											<span className="activity-type">{activity.type}</span>
-											<span className="activity-title">{activity.title}</span>
-											{activity.subtitle && (
-												<span className="activity-subtitle">{activity.subtitle}</span>
-											)}
-											{activity.library_name && (
-												<span className="activity-library">({activity.library_name})</span>
-											)}
-										</div>
-										{activity.progress > 0 && (
-											<span className="activity-progress">{activity.progress}%</span>
-										)}
+					</div>
+				</header>
+
+				<main className="dashboard-content">
+					{activeView === 'dashboard' && (
+						<div className="dashboard-grid">
+							{/* Status Cards */}
+							<div className="dashboard-card">
+								<div className="card-header">
+									<h3>Plex Status</h3>
+									<span className="card-icon">🎬</span>
+								</div>
+								<div className="card-content">
+									<div className={`status-badge ${status?.plex?.connected ? 'online' : 'offline'}`}>
+										{status?.plex?.connected ? '✓ Connected' : '✗ Disconnected'}
 									</div>
-									{activity.progress > 0 && (
-										<div className="activity-progress-bar">
-											<div 
-												className="activity-progress-fill" 
-												style={{ width: `${activity.progress}%` }}
-											></div>
-										</div>
+									{status?.plex?.name && (
+										<p className="card-detail">{status.plex.name}</p>
 									)}
 								</div>
-							))}
-						</div>
-					</section>
-				)}
+							</div>
 
-				<section className="status-section">
-					<h2>System Status</h2>
-					<div className="status-grid">
-						<div className="status-card">
-							<h3>Plex</h3>
-							<div
-								className={`status-indicator ${
-									status?.plex?.connected
-										? 'online'
-										: 'offline'
-								}`}
-							>
-								{status?.plex?.connected
-									? '✓ Connected'
-									: '✗ Disconnected'}
-							</div>
-							{status?.plex?.name && (
-								<p className="status-detail">
-									{status.plex.name}
-								</p>
-							)}
-						</div>
-						<div className="status-card">
-							<h3>Discord Bot</h3>
-							<div
-								className={`status-indicator ${
-									status?.discord?.connected
-										? 'online'
-										: 'offline'
-								}`}
-							>
-								{status?.discord?.connected
-									? '✓ Connected'
-									: '✗ Disconnected'}
-							</div>
-							{status?.discord?.username && (
-								<p className="status-detail">
-									{status.discord.username}
-								</p>
-							)}
-						</div>
-						<div className="status-card">
-							<h3>Notifications</h3>
-							<div className="status-indicator online">
-								{notifications.length} Recent
-							</div>
-							<p className="status-detail">Last 24 hours</p>
-						</div>
-						<div className="status-card">
-							<h3>Plex Scanning</h3>
-							<div
-								className={`status-indicator ${
-									status?.plex?.scan_enabled
-										? 'online'
-										: 'offline'
-								}`}
-							>
-								{status?.plex?.scan_enabled
-									? '✓ Enabled'
-									: '✗ Disabled'}
-							</div>
-							<p className="status-detail">
-								Auto-scan on notifications
-							</p>
-						</div>
-					</div>
-				</section>
-
-				<section className="notifications-section">
-					<div className="notifications-header">
-						<h2>Recent Notifications</h2>
-						<div className="notifications-controls">
-							<input
-								type="text"
-								className="notification-search"
-								placeholder="Search notifications..."
-								value={notificationSearch}
-								onChange={(e) => setNotificationSearch(e.target.value)}
-							/>
-							<select
-								className="notification-filter"
-								value={notificationFilter}
-								onChange={(e) => setNotificationFilter(e.target.value)}
-							>
-								<option value="all">All Types</option>
-								<option value="sonarr">Sonarr</option>
-								<option value="radarr">Radarr</option>
-								<option value="readarr">Readarr</option>
-							</select>
-						</div>
-					</div>
-					<div className="notifications-list">
-						{filteredNotifications.length === 0 ? (
-							<div className="empty-state">
-								{notifications.length === 0
-									? 'No notifications in the last 24 hours'
-									: 'No notifications match your filters'}
-							</div>
-						) : (
-							filteredNotifications.map((notif, idx) => (
-								<div
-									key={idx}
-									className="notification-card"
-									onClick={() => {
-										setSelectedNotification(notif);
-										setShowNotificationDetails(true);
-									}}
-									style={{ cursor: 'pointer' }}
-								>
-									<div className="notification-header">
-										<span
-											className={`notification-type ${notif.type}`}
-										>
-											{notif.type}
-										</span>
-										<span className="notification-time">
-											{new Date(
-												notif.timestamp
-											).toLocaleString()}
-										</span>
+							<div className="dashboard-card">
+								<div className="card-header">
+									<h3>Discord Bot</h3>
+									<span className="card-icon">🤖</span>
+								</div>
+								<div className="card-content">
+									<div className={`status-badge ${status?.discord?.connected ? 'online' : 'offline'}`}>
+										{status?.discord?.connected ? '✓ Connected' : '✗ Disconnected'}
 									</div>
-									<div className="notification-content">
-										<div className="notification-media">
-											{(notif.poster_url || notif.fanart_url || notif.backdrop_url) && (
-												<div className="notification-image">
-													<img
-														src={notif.poster_url || notif.fanart_url || notif.backdrop_url}
-														alt={notif.title}
-														onError={(e) => {
-															// Fallback if image fails to load
-															e.target.style.display = 'none';
-														}}
-													/>
-												</div>
-											)}
-											<div className="notification-text">
-												<h4>{notif.title}{notif.year && ` (${notif.year})`}</h4>
-												{notif.episodes && notif.episodes.length > 0 ? (
-													<div className="notification-episodes-list">
-														{notif.episodes.length === 1 ? (
-															<p>
-																S{notif.episodes[0].season.toString().padStart(2, '0')}E
-																{notif.episodes[0].number.toString().padStart(2, '0')}:{' '}
-																{notif.episodes[0].title}
-															</p>
-														) : (
-															<>
-																<p className="notification-batch">
-																	{notif.episodes.length} episodes imported
-																</p>
-																<ul className="notification-episodes-preview">
-																	{notif.episodes.slice(0, 3).map((ep, idx) => (
-																		<li key={idx}>
-																			S{ep.season.toString().padStart(2, '0')}E
-																			{ep.number.toString().padStart(2, '0')}: {ep.title}
-																		</li>
-																	))}
-																	{notif.episodes.length > 3 && (
-																		<li className="episodes-more">
-																			+{notif.episodes.length - 3} more...
-																		</li>
-																	)}
-																</ul>
-															</>
-														)}
+									{status?.discord?.username && (
+										<p className="card-detail">{status.discord.username}</p>
+									)}
+								</div>
+							</div>
+
+							<div className="dashboard-card">
+								<div className="card-header">
+									<h3>Notifications</h3>
+									<span className="card-icon">🔔</span>
+								</div>
+								<div className="card-content">
+									<div className="stat-value">{notifications.length}</div>
+									<p className="card-detail">Last 24 hours</p>
+								</div>
+							</div>
+
+							<div className="dashboard-card">
+								<div className="card-header">
+									<h3>Pending Scans</h3>
+									<span className="card-icon">⏳</span>
+								</div>
+								<div className="card-content">
+									<div className="stat-value">{pendingScans.filter(s => s.status === 'pending').length}</div>
+									<p className="card-detail">Active scans</p>
+								</div>
+							</div>
+
+							{/* Quick Actions Card */}
+							<div className="dashboard-card dashboard-card-wide">
+								<div className="card-header">
+									<h3>Quick Actions</h3>
+								</div>
+								<div className="card-content">
+									<div className="actions-grid">
+										<button
+											className="action-btn"
+											onClick={async () => {
+												setScanningAll(true);
+												setScanAllProgress(null);
+												try {
+													const response = await fetch(`${API_BASE}/plex/scan-all`, {
+														method: 'POST',
+														headers: { 'Content-Type': 'application/json' },
+													});
+													const data = await response.json();
+													setScanAllProgress(data);
+													fetchPendingScans();
+													if (data.success) {
+														alert(`Successfully scanned ${data.scanned} of ${data.total} libraries!`);
+													} else {
+														alert(`Scan completed with issues: ${data.message || 'Some libraries failed to scan'}`);
+													}
+												} catch (error) {
+													alert('Failed to trigger scan');
+												} finally {
+													setScanningAll(false);
+												}
+											}}
+											disabled={scanningAll}
+										>
+											<span className="action-icon">📚</span>
+											<span className="action-label">{scanningAll ? 'Scanning...' : 'Scan All Libraries'}</span>
+										</button>
+										<button
+											className="action-btn"
+											onClick={() => {
+												setShowBrowseModal(true);
+												fetchLibraries();
+											}}
+										>
+											<span className="action-icon">🎬</span>
+											<span className="action-label">Scan Show/Movie</span>
+										</button>
+									</div>
+								</div>
+							</div>
+
+							{/* Recent Activity Card */}
+							{pendingScans.length > 0 && (
+								<div className="dashboard-card dashboard-card-wide">
+									<div className="card-header">
+										<h3>Recent Scans</h3>
+										<button
+											className="btn-icon"
+											onClick={() => {
+												fetchPendingScans();
+												fetchPlexActivities();
+											}}
+											title="Refresh"
+										>
+											🔄
+										</button>
+									</div>
+									<div className="card-content">
+										<div className="scans-list">
+											{pendingScans.slice(0, 5).map((scan) => (
+												<div key={scan.scan_id} className="scan-item">
+													<div className="scan-info">
+														<span className="scan-name">{scan.name}</span>
+														<span className="scan-type">{scan.type}</span>
 													</div>
-												) : notif.episode && (
-													<p>
-														S{notif.episode.season.toString().padStart(2, '0')}E
-														{notif.episode.number.toString().padStart(2, '0')}:{' '}
-														{notif.episode.title}
-													</p>
-												)}
-												{notif.quality && (
-													<p className="notification-quality">
-														Quality: {notif.quality}
-													</p>
-												)}
-											</div>
+													<span className={`scan-status ${scan.status}`}>
+														{scan.status === 'pending' ? '⏳' : scan.status === 'completed' ? '✓' : '✗'}
+													</span>
+												</div>
+											))}
 										</div>
 									</div>
 								</div>
-							))
-						)}
-					</div>
-				</section>
-			</main>
+							)}
+						</div>
+					)}
+
+					{activeView === 'scans' && (
+						<div className="view-content">
+							<div className="dashboard-card">
+								<div className="card-header">
+									<h3>Pending Scans</h3>
+									<button
+										className="btn-icon"
+										onClick={() => {
+											fetchPendingScans();
+											fetchPlexActivities();
+										}}
+										title="Refresh"
+									>
+										🔄
+									</button>
+								</div>
+								<div className="card-content">
+									{pendingScans.length > 0 ? (
+										<div className="scans-list-full">
+											{pendingScans.map((scan) => (
+												<div key={scan.scan_id} className="scan-card-full">
+													<div className="scan-header-full">
+														<div className="scan-info-full">
+															<span className="scan-type-badge">{scan.type}</span>
+															<span className="scan-name-full">{scan.name}</span>
+														</div>
+														<span className={`scan-status-badge ${scan.status}`}>
+															{scan.status === 'pending' ? '⏳ Pending' : scan.status === 'completed' ? '✓ Completed' : '✗ Failed'}
+														</span>
+													</div>
+													<div className="scan-time-full">
+														Started: {new Date(scan.timestamp).toLocaleString()}
+														{scan.completed_at && (
+															<span> • Completed: {new Date(scan.completed_at).toLocaleString()}</span>
+														)}
+													</div>
+												</div>
+											))}
+										</div>
+									) : (
+										<div className="empty-state">No pending scans</div>
+									)}
+								</div>
+							</div>
+						</div>
+					)}
+
+					{activeView === 'activities' && (
+						<div className="view-content">
+							<div className="dashboard-card">
+								<div className="card-header">
+									<h3>Plex Activities & Queued Scans</h3>
+									<button
+										className="btn-icon"
+										onClick={() => {
+											fetchPlexActivities();
+											fetchPendingScans();
+										}}
+										title="Refresh"
+									>
+										🔄
+									</button>
+								</div>
+								<div className="card-content">
+									{plexActivities.length > 0 ? (
+										<div className="activities-list-full">
+											{plexActivities.map((activity, idx) => (
+												<div key={activity.uuid || idx} className="activity-card-full">
+													<div className="activity-header-full">
+														<div className="activity-info-full">
+															<span className="activity-type-badge">{activity.type}</span>
+															<span className="activity-title-full">{activity.title}</span>
+															{activity.subtitle && (
+																<span className="activity-subtitle-full">{activity.subtitle}</span>
+															)}
+															{activity.library_name && (
+																<span className="activity-library-full">({activity.library_name})</span>
+															)}
+														</div>
+														{activity.progress > 0 && (
+															<span className="activity-progress-badge">{activity.progress}%</span>
+														)}
+													</div>
+													{activity.progress > 0 && (
+														<div className="activity-progress-bar-full">
+															<div 
+																className="activity-progress-fill-full" 
+																style={{ width: `${activity.progress}%` }}
+															></div>
+														</div>
+													)}
+												</div>
+											))}
+										</div>
+									) : (
+										<div className="empty-state">No active activities</div>
+									)}
+								</div>
+							</div>
+						</div>
+					)}
+
+					{activeView === 'notifications' && (
+						<div className="view-content">
+							<div className="dashboard-card">
+								<div className="card-header">
+									<h3>Recent Notifications</h3>
+									<div className="notifications-controls">
+										<input
+											type="text"
+											className="notification-search"
+											placeholder="Search..."
+											value={notificationSearch}
+											onChange={(e) => setNotificationSearch(e.target.value)}
+										/>
+										<select
+											className="notification-filter"
+											value={notificationFilter}
+											onChange={(e) => setNotificationFilter(e.target.value)}
+										>
+											<option value="all">All Types</option>
+											<option value="sonarr">Sonarr</option>
+											<option value="radarr">Radarr</option>
+											<option value="readarr">Readarr</option>
+										</select>
+									</div>
+								</div>
+								<div className="card-content">
+									<div className="notifications-list-full">
+										{filteredNotifications.length === 0 ? (
+											<div className="empty-state">
+												{notifications.length === 0
+													? 'No notifications in the last 24 hours'
+													: 'No notifications match your filters'}
+											</div>
+										) : (
+											filteredNotifications.map((notif, idx) => (
+												<div
+													key={idx}
+													className="notification-card-full"
+													onClick={() => {
+														setSelectedNotification(notif);
+														setShowNotificationDetails(true);
+													}}
+													style={{ cursor: 'pointer' }}
+												>
+													<div className="notification-header-full">
+														<span className={`notification-type-badge ${notif.type}`}>
+															{notif.type}
+														</span>
+														<span className="notification-time-full">
+															{new Date(notif.timestamp).toLocaleString()}
+														</span>
+													</div>
+													<div className="notification-content-full">
+														{(notif.poster_url || notif.fanart_url || notif.backdrop_url) && (
+															<div className="notification-image-full">
+																<img
+																	src={notif.poster_url || notif.fanart_url || notif.backdrop_url}
+																	alt={notif.title}
+																	onError={(e) => {
+																		e.target.style.display = 'none';
+																	}}
+																/>
+															</div>
+														)}
+														<div className="notification-text-full">
+															<h4>{notif.title}{notif.year && ` (${notif.year})`}</h4>
+															{notif.episodes && notif.episodes.length > 0 ? (
+																<div className="notification-episodes-list">
+																	{notif.episodes.length === 1 ? (
+																		<p>
+																			S{notif.episodes[0].season.toString().padStart(2, '0')}E
+																			{notif.episodes[0].number.toString().padStart(2, '0')}:{' '}
+																			{notif.episodes[0].title}
+																		</p>
+																	) : (
+																		<>
+																			<p className="notification-batch">
+																				{notif.episodes.length} episodes imported
+																			</p>
+																			<ul className="notification-episodes-preview">
+																				{notif.episodes.slice(0, 3).map((ep, idx) => (
+																					<li key={idx}>
+																						S{ep.season.toString().padStart(2, '0')}E
+																						{ep.number.toString().padStart(2, '0')}: {ep.title}
+																					</li>
+																				))}
+																				{notif.episodes.length > 3 && (
+																					<li className="episodes-more">
+																						+{notif.episodes.length - 3} more...
+																					</li>
+																				)}
+																			</ul>
+																		</>
+																	)}
+																</div>
+															) : notif.episode && (
+																<p>
+																	S{notif.episode.season.toString().padStart(2, '0')}E
+																	{notif.episode.number.toString().padStart(2, '0')}:{' '}
+																	{notif.episode.title}
+																</p>
+															)}
+															{notif.quality && (
+																<p className="notification-quality">
+																	Quality: {notif.quality}
+																</p>
+															)}
+														</div>
+													</div>
+												</div>
+											))
+										)}
+									</div>
+								</div>
+							</div>
+						</div>
+					)}
+				</main>
+			</div>
 
 			<Modal
 				isOpen={showScanModal}
