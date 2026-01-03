@@ -288,75 +288,87 @@ export default function SettingsModal({ isOpen, onClose, status, embedded = fals
 								{activeTab === 'sonarr' && (
 									<div className="settings-section">
 										<h3>Sonarr Instances</h3>
-										{config.sonarr_instances?.map((instance, index) => (
-											<div key={index} className="array-item">
-												<div className="array-item-header">
-													<h4>Instance {index + 1}</h4>
-													<button
-														className="btn btn-danger btn-small"
-														onClick={() => removeArrayItem('sonarr_instances', index)}
-													>
-														Remove
-													</button>
+										<p className="setting-description" style={{ marginBottom: '1.5rem' }}>
+											Configure Sonarr instances for webhook notifications and API access. Sonarr instances are used to receive download notifications and fetch metadata.
+										</p>
+										{config.sonarr_instances && config.sonarr_instances.length > 0 ? (
+											config.sonarr_instances.map((instance, index) => (
+												<div key={index} className="array-item">
+													<div className="array-item-header">
+														<h4>Instance {index + 1}</h4>
+														<button
+															className="btn btn-danger btn-small"
+															onClick={() => removeArrayItem('sonarr_instances', index)}
+														>
+															Remove
+														</button>
+													</div>
+													<SettingItem label="Name" description="Display name for this Sonarr instance">
+														<input
+															type="text"
+															value={instance.name || ''}
+															onChange={(e) =>
+																updateArrayItem('sonarr_instances', index, {
+																	name: e.target.value,
+																})
+															}
+															placeholder="Sonarr"
+														/>
+													</SettingItem>
+													<SettingItem label="URL" description="Sonarr instance URL">
+														<input
+															type="text"
+															value={instance.url || ''}
+															onChange={(e) =>
+																updateArrayItem('sonarr_instances', index, {
+																	url: e.target.value,
+																})
+															}
+															placeholder="http://sonarr:8989"
+														/>
+													</SettingItem>
+													<SettingItem label="API Key" description="Sonarr API key">
+														<input
+															type="password"
+															value={instance.api_key || ''}
+															onChange={(e) =>
+																updateArrayItem('sonarr_instances', index, {
+																	api_key: e.target.value,
+																})
+															}
+															placeholder="API Key"
+														/>
+													</SettingItem>
+													<SettingItem label="Enabled" description="Enable this Sonarr instance">
+														<Toggle
+															checked={instance.enabled ?? false}
+															onChange={(e) =>
+																updateArrayItem('sonarr_instances', index, {
+																	enabled: e.target.checked,
+																})
+															}
+														/>
+													</SettingItem>
 												</div>
-												<SettingItem label="Name">
-													<input
-														type="text"
-														value={instance.name || ''}
-														onChange={(e) =>
-															updateArrayItem('sonarr_instances', index, {
-																name: e.target.value,
-															})
-														}
-														placeholder="Sonarr"
-													/>
-												</SettingItem>
-												<SettingItem label="URL">
-													<input
-														type="text"
-														value={instance.url || ''}
-														onChange={(e) =>
-															updateArrayItem('sonarr_instances', index, {
-																url: e.target.value,
-															})
-														}
-														placeholder="http://sonarr:8989"
-													/>
-												</SettingItem>
-												<SettingItem label="API Key">
-													<input
-														type="password"
-														value={instance.api_key || ''}
-														onChange={(e) =>
-															updateArrayItem('sonarr_instances', index, {
-																api_key: e.target.value,
-															})
-														}
-														placeholder="API Key"
-													/>
-												</SettingItem>
-												<SettingItem label="Enabled">
-													<Toggle
-														checked={instance.enabled ?? false}
-														onChange={(e) =>
-															updateArrayItem('sonarr_instances', index, {
-																enabled: e.target.checked,
-															})
-														}
-													/>
-												</SettingItem>
+											))
+										) : (
+											<div className="empty-state" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)', fontStyle: 'italic', marginBottom: '1rem' }}>
+												No Sonarr instances configured. Add an instance to enable Sonarr integration.
 											</div>
-										))}
+										)}
 										<button
 											className="btn btn-secondary"
-											onClick={() =>
+											onClick={() => {
+												if (!config.sonarr_instances) {
+													updateConfig('sonarr_instances', []);
+												}
 												addArrayItem('sonarr_instances', {
 													name: '',
 													url: '',
 													api_key: '',
 													enabled: false,
-												})
-											}
+												});
+											}}
 										>
 											+ Add Sonarr Instance
 										</button>
@@ -365,158 +377,73 @@ export default function SettingsModal({ isOpen, onClose, status, embedded = fals
 
 								{activeTab === 'radarr' && (
 									<div className="settings-section">
-										<h3>Radarr Instances</h3>
-										<p className="setting-description" style={{ marginBottom: '1.5rem' }}>
-											Configure Radarr instances for webhook notifications. Radarr instances are used to receive download notifications.
-										</p>
-										{config.radarr_instances?.map((instance, index) => (
-											<div key={index} className="array-item">
-												<div className="array-item-header">
-													<h4>Instance {index + 1}</h4>
-													<button
-														className="btn btn-danger btn-small"
-														onClick={() => removeArrayItem('radarr_instances', index)}
-													>
-														Remove
-													</button>
-												</div>
-												<SettingItem label="Name">
-													<input
-														type="text"
-														value={instance.name || ''}
-														onChange={(e) =>
-															updateArrayItem('radarr_instances', index, {
-																name: e.target.value,
-															})
-														}
-														placeholder="Radarr"
-													/>
-												</SettingItem>
-												<SettingItem label="URL">
-													<input
-														type="text"
-														value={instance.url || ''}
-														onChange={(e) =>
-															updateArrayItem('radarr_instances', index, {
-																url: e.target.value,
-															})
-														}
-														placeholder="http://radarr:7878"
-													/>
-												</SettingItem>
-												<SettingItem label="API Key">
-													<input
-														type="password"
-														value={instance.api_key || ''}
-														onChange={(e) =>
-															updateArrayItem('radarr_instances', index, {
-																api_key: e.target.value,
-															})
-														}
-														placeholder="API Key"
-													/>
-												</SettingItem>
-												<SettingItem label="Enabled">
-													<Toggle
-														checked={instance.enabled ?? false}
-														onChange={(e) =>
-															updateArrayItem('radarr_instances', index, {
-																enabled: e.target.checked,
-															})
-														}
-													/>
-												</SettingItem>
-											</div>
-										))}
-										{(!config.radarr_instances || config.radarr_instances.length === 0) && (
-											<div className="empty-state" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
-												No Radarr instances configured. Radarr notifications work via webhooks and don't require instance configuration.
-											</div>
-										)}
-										<button
-											className="btn btn-secondary"
-											onClick={() =>
-												addArrayItem('radarr_instances', {
-													name: '',
-													url: '',
-													api_key: '',
-													enabled: false,
-												})
-											}
-										>
-											+ Add Radarr Instance
-										</button>
-									</div>
-								)}
-
-								{activeTab === 'radarr' && (
-									<div className="settings-section">
 										<h3>Radarr Configuration</h3>
 										<p className="setting-description" style={{ marginBottom: '1.5rem' }}>
-											Radarr notifications are received via webhooks. You can optionally configure Radarr instances here for future API integration.
+											Radarr notifications are received via webhooks at <code>/webhook/radarr</code>. You can optionally configure Radarr instances here for future API integration.
 										</p>
-										{config.radarr_instances?.map((instance, index) => (
-											<div key={index} className="array-item">
-												<div className="array-item-header">
-													<h4>Instance {index + 1}</h4>
-													<button
-														className="btn btn-danger btn-small"
-														onClick={() => removeArrayItem('radarr_instances', index)}
-													>
-														Remove
-													</button>
+										{config.radarr_instances && config.radarr_instances.length > 0 ? (
+											config.radarr_instances.map((instance, index) => (
+												<div key={index} className="array-item">
+													<div className="array-item-header">
+														<h4>Instance {index + 1}</h4>
+														<button
+															className="btn btn-danger btn-small"
+															onClick={() => removeArrayItem('radarr_instances', index)}
+														>
+															Remove
+														</button>
+													</div>
+													<SettingItem label="Name" description="Display name for this Radarr instance">
+														<input
+															type="text"
+															value={instance.name || ''}
+															onChange={(e) =>
+																updateArrayItem('radarr_instances', index, {
+																	name: e.target.value,
+																})
+															}
+															placeholder="Radarr"
+														/>
+													</SettingItem>
+													<SettingItem label="URL" description="Radarr instance URL">
+														<input
+															type="text"
+															value={instance.url || ''}
+															onChange={(e) =>
+																updateArrayItem('radarr_instances', index, {
+																	url: e.target.value,
+																})
+															}
+															placeholder="http://radarr:7878"
+														/>
+													</SettingItem>
+													<SettingItem label="API Key" description="Radarr API key">
+														<input
+															type="password"
+															value={instance.api_key || ''}
+															onChange={(e) =>
+																updateArrayItem('radarr_instances', index, {
+																	api_key: e.target.value,
+																})
+															}
+															placeholder="API Key"
+														/>
+													</SettingItem>
+													<SettingItem label="Enabled" description="Enable this Radarr instance">
+														<Toggle
+															checked={instance.enabled ?? false}
+															onChange={(e) =>
+																updateArrayItem('radarr_instances', index, {
+																	enabled: e.target.checked,
+																})
+															}
+														/>
+													</SettingItem>
 												</div>
-												<SettingItem label="Name">
-													<input
-														type="text"
-														value={instance.name || ''}
-														onChange={(e) =>
-															updateArrayItem('radarr_instances', index, {
-																name: e.target.value,
-															})
-														}
-														placeholder="Radarr"
-													/>
-												</SettingItem>
-												<SettingItem label="URL">
-													<input
-														type="text"
-														value={instance.url || ''}
-														onChange={(e) =>
-															updateArrayItem('radarr_instances', index, {
-																url: e.target.value,
-															})
-														}
-														placeholder="http://radarr:7878"
-													/>
-												</SettingItem>
-												<SettingItem label="API Key">
-													<input
-														type="password"
-														value={instance.api_key || ''}
-														onChange={(e) =>
-															updateArrayItem('radarr_instances', index, {
-																api_key: e.target.value,
-															})
-														}
-														placeholder="API Key"
-													/>
-												</SettingItem>
-												<SettingItem label="Enabled">
-													<Toggle
-														checked={instance.enabled ?? false}
-														onChange={(e) =>
-															updateArrayItem('radarr_instances', index, {
-																enabled: e.target.checked,
-															})
-														}
-													/>
-												</SettingItem>
-											</div>
-										))}
-										{(!config.radarr_instances || config.radarr_instances.length === 0) && (
+											))
+										) : (
 											<div className="empty-state" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)', fontStyle: 'italic', marginBottom: '1rem' }}>
-												No Radarr instances configured. Radarr notifications work via webhooks at /webhook/radarr
+												No Radarr instances configured. Radarr notifications work via webhooks and don't require instance configuration.
 											</div>
 										)}
 										<button
@@ -619,50 +546,74 @@ export default function SettingsModal({ isOpen, onClose, status, embedded = fals
 								{activeTab === 'users' && (
 									<div className="settings-section">
 										<h3>User Mappings</h3>
-										<p className="setting-description">
-											Map Plex usernames to Discord user IDs for notifications
+										<p className="setting-description" style={{ marginBottom: '1.5rem' }}>
+											Map Plex usernames to Discord user IDs to enable personalized notifications. When a Plex user is mentioned in notifications, the bot will DM the corresponding Discord user.
 										</p>
-										{Object.entries(config.user_mappings?.plex_to_discord || {}).map(
-											([plexUser, discordId], index) => (
-												<div key={index} className="array-item">
-													<div className="array-item-header">
-														<h4>{plexUser}</h4>
-														<button
-															className="btn btn-danger btn-small"
-															onClick={() => {
-																const newMappings = { ...config.user_mappings.plex_to_discord };
-																delete newMappings[plexUser];
-																updateConfig('user_mappings.plex_to_discord', newMappings);
-															}}
+										{config.user_mappings?.plex_to_discord && Object.keys(config.user_mappings.plex_to_discord).length > 0 ? (
+											Object.entries(config.user_mappings.plex_to_discord).map(
+												([plexUser, discordId], index) => (
+													<div key={index} className="array-item">
+														<div className="array-item-header">
+															<h4>{plexUser || 'Unnamed User'}</h4>
+															<button
+																className="btn btn-danger btn-small"
+																onClick={() => {
+																	const newMappings = { ...(config.user_mappings?.plex_to_discord || {}) };
+																	delete newMappings[plexUser];
+																	updateConfig('user_mappings.plex_to_discord', newMappings);
+																}}
+															>
+																Remove
+															</button>
+														</div>
+														<SettingItem 
+															label="Plex Username" 
+															description="Plex username (read-only)"
 														>
-															Remove
-														</button>
+															<input
+																type="text"
+																value={plexUser}
+																disabled
+																style={{ opacity: 0.7 }}
+															/>
+														</SettingItem>
+														<SettingItem 
+															label="Discord User ID" 
+															description="Discord user ID to receive notifications"
+														>
+															<input
+																type="text"
+																value={discordId || ''}
+																onChange={(e) => {
+																	const newMappings = { ...(config.user_mappings?.plex_to_discord || {}) };
+																	newMappings[plexUser] = e.target.value;
+																	updateConfig('user_mappings.plex_to_discord', newMappings);
+																}}
+																placeholder="123456789012345678"
+															/>
+														</SettingItem>
 													</div>
-													<SettingItem label="Discord User ID">
-														<input
-															type="text"
-															value={discordId}
-															onChange={(e) => {
-																const newMappings = { ...config.user_mappings.plex_to_discord };
-																newMappings[plexUser] = e.target.value;
-																updateConfig('user_mappings.plex_to_discord', newMappings);
-															}}
-															placeholder="Discord User ID"
-														/>
-													</SettingItem>
-												</div>
+												)
 											)
+										) : (
+											<div className="empty-state" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)', fontStyle: 'italic', marginBottom: '1rem' }}>
+												No user mappings configured. Add mappings to enable personalized Discord notifications.
+											</div>
 										)}
 										<button
 											className="btn btn-secondary"
 											onClick={() => {
 												const plexUser = prompt('Enter Plex username:');
-												if (plexUser) {
+												if (plexUser && plexUser.trim()) {
 													const newMappings = {
-														...config.user_mappings.plex_to_discord,
-														[plexUser]: '',
+														...(config.user_mappings?.plex_to_discord || {}),
+														[plexUser.trim()]: '',
 													};
-													updateConfig('user_mappings.plex_to_discord', newMappings);
+													if (!config.user_mappings) {
+														updateConfig('user_mappings', { plex_to_discord: newMappings });
+													} else {
+														updateConfig('user_mappings.plex_to_discord', newMappings);
+													}
 												}
 											}}
 										>
