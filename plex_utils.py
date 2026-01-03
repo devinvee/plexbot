@@ -157,9 +157,75 @@ async def scan_plex_library_async(library_name: Optional[str] = None, media_path
     return await asyncio.to_thread(scan_plex_library, library_name, media_path)
 
 
+def get_plex_activities() -> list:
+    """
+    Gets current activities from Plex using the /activities endpoint.
+    Reference: https://developer.plex.tv/pms/
+    
+    Returns:
+        List of activity dictionaries.
+    """
+    try:
+        plex_url = os.getenv("PLEX_URL")
+        plex_token = os.getenv("PLEX_TOKEN")
+        
+        if not plex_url or not plex_token:
+            return []
+        
+        # Use Plex API /activities endpoint
+        activities_url = f"{plex_url}/activities"
+        params = {
+            'X-Plex-Token': plex_token
+        }
+        
+        response = requests.get(activities_url, params=params, timeout=5)
+        response.raise_for_status()
+        
+        # Parse XML response (Plex API returns XML by default)
+        import xml.etree.ElementTree as ET
+        root = ET.fromstring(response.text)
+        
+        activities = []
+        # Find all Activity elements
+        for activity in root.findall('.//Activity'):
+            activity_type = activity.get('type', '')
+            title = activity.get('title', '')
+            subtitle = activity.get('subtitle', '')
+            
+            # Parse context if available
+            context = {}
+            context_elem = activity.find('Context')
+            if context_elem is not None:
+                library_section_id = context_elem.get('librarySectionID')
+                if library_section_id:
+                    context['librarySectionID'] = library_section_id
+            
+            activity_data = {
+                'key': activity.get('key', ''),
+                'type': activity_type,
+                'title': title,
+                'subtitle': subtitle,
+                'progress': int(activity.get('progress', 0)),
+                'context': context,
+            }
+            
+            # Check if this is a library refresh/scan activity
+            # Plex uses types like "library.refresh" or similar
+            if ('refresh' in activity_type.lower() or 
+                'scan' in activity_type.lower() or
+                'refresh' in title.lower() or
+                'scan' in title.lower()):
+                activities.append(activity_data)
+        
+        return activities
+    except Exception as e:
+        logger.warning(f"Error getting Plex activities: {e}")
+        return []
+
+
 def is_plex_scanning(section_key: str) -> bool:
     """
-    Checks if a Plex library section is currently scanning.
+    Checks if a Plex library section is currently scanning using the activities API.
     
     Args:
         section_key: The key/ID of the library section.
@@ -168,22 +234,36 @@ def is_plex_scanning(section_key: str) -> bool:
         True if scanning, False otherwise.
     """
     try:
+        # First try using the activities API
+        activities = get_plex_activities()
+        for activity in activities:
+            # Check if activity is related to this section
+            context = activity.get('context', {})
+            if isinstance(context, dict):
+                section_id = context.get('librarySectionID')
+                if section_id and str(section_id) == str(section_key):
+                    logger.info(f"Found scanning activity for section {section_key}")
+                    return True
+        
+        # Fallback: check section refreshing attribute
         plex = get_plex_client()
-        if not plex:
-            return False
+        if plex:
+            section = plex.library.sectionByID(section_key)
+            if section:
+                return getattr(section, 'refreshing', False)
         
-        # Get the section and check if it's refreshing
-        section = plex.library.sectionByID(section_key)
-        if not section:
-            return False
-        
-        # Check the refreshing attribute (if available)
-        # Note: Plex API may not always expose this, so we'll use a timeout-based approach
-        # For now, we'll assume scanning is in progress if we just triggered it
-        # A better approach is to poll the section's update status
-        return getattr(section, 'refreshing', False)
+        return False
     except Exception as e:
         logger.warning(f"Error checking scan status: {e}")
+        # Fallback to section attribute check
+        try:
+            plex = get_plex_client()
+            if plex:
+                section = plex.library.sectionByID(section_key)
+                if section:
+                    return getattr(section, 'refreshing', False)
+        except:
+            pass
         return False
 
 

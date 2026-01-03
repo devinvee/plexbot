@@ -58,29 +58,55 @@ def add_pending_scan(scan_type: str, scan_id: str, name: str, library_key: str =
 
 
 def check_scan_status(scan_id: str) -> str:
-    """Check if a scan is still pending or completed."""
+    """Check if a scan is still pending or completed using Plex Activities API."""
     if scan_id not in PENDING_SCANS:
         return "unknown"
-    
+
     scan_info = PENDING_SCANS[scan_id]
     scan_type = scan_info.get("type")
     library_key = scan_info.get("library_key")
+
+    # Get current activities from Plex
+    from plex_utils import get_plex_activities, is_plex_scanning
+    activities = get_plex_activities()
     
+    # Check if there are any scanning activities
+    has_scanning_activity = len(activities) > 0
+
     if scan_type == "library" and library_key:
-        # Check if library is still scanning
-        from plex_utils import is_plex_scanning
+        # Check if this specific library is scanning
         try:
             section_id = int(library_key)
-            is_scanning = is_plex_scanning(section_id)
-            if not is_scanning:
-                # Scan likely completed
-                scan_info["status"] = "completed"
-                scan_info["completed_at"] = datetime.now().isoformat()
-                return "completed"
+            # Check activities for this specific section
+            section_scanning = False
+            for activity in activities:
+                # Try to extract section ID from activity context
+                # Activities might have librarySectionID in context
+                context = activity.get('context', {})
+                if isinstance(context, dict):
+                    act_section_id = context.get('librarySectionID') or context.get('sectionID')
+                    if act_section_id and str(act_section_id) == str(section_id):
+                        section_scanning = True
+                        logger.info(f"Found scanning activity for section {section_id}")
+                        break
+            
+            # Also check using the section's refreshing attribute
+            if not section_scanning:
+                section_scanning = is_plex_scanning(section_id)
+            
+            if not section_scanning:
+                # No scanning activity found, check timeout
+                scan_timestamp = datetime.fromisoformat(scan_info["timestamp"])
+                time_since_scan = (datetime.now() - scan_timestamp).total_seconds()
+                # If no activity and it's been more than 2 minutes, assume completed
+                if time_since_scan > 120:
+                    scan_info["status"] = "completed"
+                    scan_info["completed_at"] = datetime.now().isoformat()
+                    return "completed"
             return "pending"
         except Exception as e:
             logger.warning(f"Error checking scan status for {scan_id}: {e}")
-            # Assume completed after a timeout period
+            # Fallback to timeout
             scan_timestamp = datetime.fromisoformat(scan_info["timestamp"])
             time_since_scan = (datetime.now() - scan_timestamp).total_seconds()
             if time_since_scan > 300:  # 5 minutes
@@ -89,19 +115,33 @@ def check_scan_status(scan_id: str) -> str:
                 return "completed"
             return "pending"
     elif scan_type == "all_libraries":
-        # For all libraries scan, mark as completed after a reasonable time
-        scan_timestamp = datetime.fromisoformat(scan_info["timestamp"])
-        time_since_scan = (datetime.now() - scan_timestamp).total_seconds()
-        # Assume completed after 10 minutes for all libraries
-        if time_since_scan > 600:
-            scan_info["status"] = "completed"
-            scan_info["completed_at"] = datetime.now().isoformat()
-            return "completed"
+        # For all libraries scan, check if any scanning activities exist
+        if not has_scanning_activity:
+            # No scanning activities, check timeout
+            scan_timestamp = datetime.fromisoformat(scan_info["timestamp"])
+            time_since_scan = (datetime.now() - scan_timestamp).total_seconds()
+            # If no activity and it's been more than 5 minutes, assume completed
+            if time_since_scan > 300:
+                scan_info["status"] = "completed"
+                scan_info["completed_at"] = datetime.now().isoformat()
+                return "completed"
         return "pending"
     else:
         # For item scans, check the library status
         if library_key:
-            return check_scan_status(f"library_{library_key}")
+            try:
+                section_id = int(library_key)
+                is_scanning = is_plex_scanning(section_id)
+                if not is_scanning:
+                    scan_timestamp = datetime.fromisoformat(scan_info["timestamp"])
+                    time_since_scan = (datetime.now() - scan_timestamp).total_seconds()
+                    if time_since_scan > 120:  # 2 minutes
+                        scan_info["status"] = "completed"
+                        scan_info["completed_at"] = datetime.now().isoformat()
+                        return "completed"
+                return "pending"
+            except:
+                pass
         # Default: assume completed after 5 minutes
         scan_timestamp = datetime.fromisoformat(scan_info["timestamp"])
         time_since_scan = (datetime.now() - scan_timestamp).total_seconds()
@@ -896,7 +936,7 @@ def api_plex_scan_all():
     try:
         scan_id = f"all_libraries_{uuid.uuid4().hex[:8]}"
         add_pending_scan("all_libraries", scan_id, "All Libraries")
-        
+
         bot_instance = app.config.get('discord_bot')
         if not bot_instance:
             return jsonify({"success": False, "message": "Bot instance not available"}), 500
@@ -1002,7 +1042,8 @@ def api_plex_item_scan():
 
         # Create scan ID and add to pending scans
         scan_id = f"item_{uuid.uuid4().hex[:8]}"
-        add_pending_scan("item", scan_id, item_name, library_key=library_key, item_key=item_key)
+        add_pending_scan("item", scan_id, item_name,
+                         library_key=library_key, item_key=item_key)
 
         logger.info(f"Starting async scan for item: {item_key}")
         # Run scan in async context
@@ -1060,7 +1101,7 @@ def api_pending_scans():
             if scan_info.get("status") == "pending":
                 check_scan_status(scan_id)  # Updates status internally
                 scan_info["checked_at"] = datetime.now().isoformat()
-        
+
         # Filter out completed scans older than 1 hour
         now = datetime.now()
         active_scans = []
@@ -1072,10 +1113,10 @@ def api_pending_scans():
                     if (now - completed_time).total_seconds() > 3600:  # 1 hour
                         continue
             active_scans.append(scan_info)
-        
+
         # Sort by timestamp, newest first
         active_scans.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
-        
+
         return jsonify({
             "success": True,
             "pending_scans": active_scans
