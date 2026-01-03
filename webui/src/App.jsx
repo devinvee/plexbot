@@ -122,8 +122,11 @@ function App() {
 		try {
 			const response = await fetch(`${API_BASE}/plex/pending-scans`);
 			const data = await response.json();
+			console.log('Pending scans response:', data);
 			if (data.success) {
 				setPendingScans(data.pending_scans || []);
+			} else {
+				console.error('Failed to fetch pending scans:', data.message);
 			}
 		} catch (error) {
 			console.error('Failed to fetch pending scans:', error);
@@ -303,9 +306,9 @@ function App() {
 					)}
 				</section>
 
-				{pendingScans.length > 0 && (
-					<section className="pending-scans-section">
-						<h2>Pending Scans</h2>
+				<section className="pending-scans-section">
+					<h2>Pending Scans</h2>
+					{pendingScans.length > 0 ? (
 						<div className="pending-scans-list">
 							{pendingScans.map((scan) => (
 								<div key={scan.scan_id} className="pending-scan-card">
@@ -327,8 +330,12 @@ function App() {
 								</div>
 							))}
 						</div>
-					</section>
-				)}
+					) : (
+						<div className="empty-state">
+							No pending scans. Trigger a scan to see it here.
+						</div>
+					)}
+				</section>
 
 				<section className="status-section">
 					<h2>System Status</h2>
