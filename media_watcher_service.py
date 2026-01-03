@@ -1103,20 +1103,20 @@ def api_pending_scans():
         # First, check Plex activities for any currently running scans
         from plex_utils import get_plex_activities, get_plex_client
         activities = get_plex_activities()
-        
+
         # Track which section IDs we've already seen in PENDING_SCANS
         tracked_sections = set()
         for scan_info in PENDING_SCANS.values():
             library_key = scan_info.get("library_key")
             if library_key:
                 tracked_sections.add(str(library_key))
-        
+
         # Add any running scans from activities that aren't already tracked
         plex = get_plex_client()
         for activity in activities:
             context = activity.get('context', {})
             library_section_id = context.get('librarySectionID')
-            
+
             if library_section_id and str(library_section_id) not in tracked_sections:
                 # This is a scan we haven't tracked yet, add it
                 try:
@@ -1124,27 +1124,28 @@ def api_pending_scans():
                     library_name = f"Library {library_section_id}"
                     if plex:
                         try:
-                            section = plex.library.sectionByID(int(library_section_id))
+                            section = plex.library.sectionByID(
+                                int(library_section_id))
                             if section:
                                 library_name = section.title
                         except:
                             pass
-                    
+
                     # Get activity details for better naming
                     activity_title = activity.get('title', '')
                     activity_subtitle = activity.get('subtitle', '')
-                    
+
                     # Use subtitle if available (often contains item name like "Carmen Sandiego (2015)")
                     display_name = library_name
                     if activity_subtitle:
                         display_name = f"{library_name}: {activity_subtitle}"
                     elif activity_title:
                         display_name = f"{library_name}: {activity_title}"
-                    
+
                     # Create a scan ID for this activity
                     activity_key = activity.get('key', '')
                     scan_id = f"activity_{library_section_id}_{activity_key[:8] if activity_key else uuid.uuid4().hex[:8]}"
-                    
+
                     # Only add if we don't already have this scan_id
                     if scan_id not in PENDING_SCANS:
                         add_pending_scan(
@@ -1154,10 +1155,11 @@ def api_pending_scans():
                             library_key=str(library_section_id)
                         )
                         tracked_sections.add(str(library_section_id))
-                        logger.info(f"Added untracked scan from activities: {display_name} (section {library_section_id})")
+                        logger.info(
+                            f"Added untracked scan from activities: {display_name} (section {library_section_id})")
                 except Exception as e:
                     logger.warning(f"Error adding scan from activity: {e}")
-        
+
         # Update status for all pending scans
         for scan_id in list(PENDING_SCANS.keys()):
             scan_info = PENDING_SCANS[scan_id]
@@ -1190,6 +1192,50 @@ def api_pending_scans():
             "success": False,
             "message": f"Error: {str(e)}",
             "pending_scans": []
+        }), 500
+
+
+@app.route('/api/plex/activities', methods=['GET'])
+def api_plex_activities():
+    """Gets all current Plex activities, including queued scans."""
+    try:
+        from plex_utils import get_plex_activities, get_plex_client
+        
+        # Get all activities (not just scans)
+        all_activities = get_plex_activities(filter_scans_only=False)
+        
+        # Get library names for better display
+        plex = get_plex_client()
+        library_map = {}
+        if plex:
+            try:
+                sections = plex.library.sections()
+                for section in sections:
+                    library_map[str(section.key)] = section.title
+            except:
+                pass
+        
+        # Enhance activities with library names
+        enhanced_activities = []
+        for activity in all_activities:
+            context = activity.get('context', {})
+            library_section_id = context.get('librarySectionID')
+            if library_section_id:
+                library_name = library_map.get(str(library_section_id), f"Library {library_section_id}")
+                activity['library_name'] = library_name
+            enhanced_activities.append(activity)
+        
+        return jsonify({
+            "success": True,
+            "activities": enhanced_activities,
+            "count": len(enhanced_activities)
+        })
+    except Exception as e:
+        logger.error(f"Error getting Plex activities: {e}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "message": f"Error: {str(e)}",
+            "activities": []
         }), 500
 
 # --- Service Setup ---

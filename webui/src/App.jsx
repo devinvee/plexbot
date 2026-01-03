@@ -42,15 +42,18 @@ function App() {
 	const [scanningAll, setScanningAll] = useState(false);
 	const [scanAllProgress, setScanAllProgress] = useState(null);
 	const [pendingScans, setPendingScans] = useState([]);
+	const [plexActivities, setPlexActivities] = useState([]);
 
 	useEffect(() => {
 		fetchStatus();
 		fetchNotifications();
 		fetchPendingScans();
+		fetchPlexActivities();
 		const interval = setInterval(() => {
 			fetchStatus();
 			fetchNotifications();
 			fetchPendingScans();
+			fetchPlexActivities();
 		}, 5000); // Refresh every 5 seconds
 		return () => clearInterval(interval);
 	}, []);
@@ -130,6 +133,18 @@ function App() {
 			}
 		} catch (error) {
 			console.error('Failed to fetch pending scans:', error);
+		}
+	};
+
+	const fetchPlexActivities = async () => {
+		try {
+			const response = await fetch(`${API_BASE}/plex/activities`);
+			const data = await response.json();
+			if (data.success) {
+				setPlexActivities(data.activities || []);
+			}
+		} catch (error) {
+			console.error('Failed to fetch Plex activities:', error);
 		}
 	};
 
@@ -336,6 +351,41 @@ function App() {
 						</div>
 					)}
 				</section>
+
+				{plexActivities.length > 0 && (
+					<section className="plex-activities-section">
+						<h2>Plex Activities & Queued Scans</h2>
+						<div className="activities-list">
+							{plexActivities.map((activity, idx) => (
+								<div key={activity.uuid || idx} className="activity-card">
+									<div className="activity-header">
+										<div className="activity-info">
+											<span className="activity-type">{activity.type}</span>
+											<span className="activity-title">{activity.title}</span>
+											{activity.subtitle && (
+												<span className="activity-subtitle">{activity.subtitle}</span>
+											)}
+											{activity.library_name && (
+												<span className="activity-library">({activity.library_name})</span>
+											)}
+										</div>
+										{activity.progress > 0 && (
+											<span className="activity-progress">{activity.progress}%</span>
+										)}
+									</div>
+									{activity.progress > 0 && (
+										<div className="activity-progress-bar">
+											<div 
+												className="activity-progress-fill" 
+												style={{ width: `${activity.progress}%` }}
+											></div>
+										</div>
+									)}
+								</div>
+							))}
+						</div>
+					</section>
+				)}
 
 				<section className="status-section">
 					<h2>System Status</h2>

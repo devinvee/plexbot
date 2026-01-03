@@ -157,10 +157,13 @@ async def scan_plex_library_async(library_name: Optional[str] = None, media_path
     return await asyncio.to_thread(scan_plex_library, library_name, media_path)
 
 
-def get_plex_activities() -> list:
+def get_plex_activities(filter_scans_only: bool = True) -> list:
     """
     Gets current activities from Plex using the /activities endpoint.
     Reference: https://developer.plex.tv/pms/
+    
+    Args:
+        filter_scans_only: If True, only return scan/refresh activities. If False, return all activities.
     
     Returns:
         List of activity dictionaries.
@@ -191,6 +194,8 @@ def get_plex_activities() -> list:
             activity_type = activity.get('type', '')
             title = activity.get('title', '')
             subtitle = activity.get('subtitle', '')
+            uuid_attr = activity.get('uuid', '')
+            cancellable = activity.get('cancellable', '0')
             
             # Parse context if available
             context = {}
@@ -202,19 +207,25 @@ def get_plex_activities() -> list:
             
             activity_data = {
                 'key': activity.get('key', ''),
+                'uuid': uuid_attr,
                 'type': activity_type,
                 'title': title,
                 'subtitle': subtitle,
                 'progress': int(activity.get('progress', 0)),
+                'cancellable': cancellable == '1',
                 'context': context,
             }
             
-            # Check if this is a library refresh/scan activity
-            # Plex uses types like "library.refresh" or similar
-            if ('refresh' in activity_type.lower() or 
-                'scan' in activity_type.lower() or
-                'refresh' in title.lower() or
-                'scan' in title.lower()):
+            # If filtering for scans only, check if this is a scan/refresh activity
+            if filter_scans_only:
+                if ('refresh' in activity_type.lower() or 
+                    'scan' in activity_type.lower() or
+                    'refresh' in title.lower() or
+                    'scan' in title.lower() or
+                    'update' in activity_type.lower()):
+                    activities.append(activity_data)
+            else:
+                # Return all activities
                 activities.append(activity_data)
         
         return activities
