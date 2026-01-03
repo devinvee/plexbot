@@ -45,12 +45,14 @@ function App() {
 	const [plexActivities, setPlexActivities] = useState([]);
 	const [activeView, setActiveView] = useState('dashboard');
 	const [sidebarOpen, setSidebarOpen] = useState(true);
+	const [userNotificationCounts, setUserNotificationCounts] = useState([]);
 
 	useEffect(() => {
 		fetchStatus();
 		fetchNotifications();
 		fetchPendingScans();
 		fetchPlexActivities();
+		fetchUserNotificationCounts();
 		// Refresh scans and activities more frequently (2 seconds) for real-time updates
 		const scanInterval = setInterval(() => {
 			fetchPendingScans();
@@ -60,6 +62,7 @@ function App() {
 		const statusInterval = setInterval(() => {
 			fetchStatus();
 			fetchNotifications();
+			fetchUserNotificationCounts();
 		}, 5000); // Refresh status every 5 seconds
 		return () => {
 			clearInterval(scanInterval);
@@ -154,6 +157,18 @@ function App() {
 			}
 		} catch (error) {
 			console.error('Failed to fetch Plex activities:', error);
+		}
+	};
+
+	const fetchUserNotificationCounts = async () => {
+		try {
+			const response = await fetch(`${API_BASE}/user-notification-counts`);
+			const data = await response.json();
+			if (data.success) {
+				setUserNotificationCounts(data.user_counts || []);
+			}
+		} catch (error) {
+			console.error('Failed to fetch user notification counts:', error);
 		}
 	};
 

@@ -24,8 +24,18 @@ from plex_utils import (
     get_library_items,
     scan_plex_item_async
 )
+from notification_db import (
+    init_db,
+    save_notification,
+    get_recent_notifications,
+    get_user_notification_counts,
+    get_user_notification_count
+)
 
 logger = logging.getLogger(__name__)
+
+# Initialize database on module load
+init_db()
 
 # --- State Management ---
 EPISODE_NOTIFICATION_BUFFER: Dict[str, list] = defaultdict(list)
@@ -375,7 +385,9 @@ async def _process_and_send_buffered_notifications(series_id: str, bot_instance:
         latest_season_num = episode_data.get('seasonNumber', 0)
         latest_episode_num = episode_data.get('episodeNumber', 0)
         latest_episode_title = episode_data.get('title', 'Unknown Title')
-        NOTIFICATION_HISTORY.append({
+        
+        # Save to in-memory history (for backward compatibility)
+        notification_data = {
             'type': 'sonarr',
             'title': series_data.get('title', 'Unknown Series'),
             'year': series_data.get('year'),
@@ -390,7 +402,29 @@ async def _process_and_send_buffered_notifications(series_id: str, bot_instance:
             'episode_count': ep_count,
             'poster_url': poster_url if poster_url and poster_url.startswith("http") else None,
             'fanart_url': fanart_url if fanart_url and fanart_url.startswith("http") else None
-        })
+        }
+        NOTIFICATION_HISTORY.append(notification_data)
+        
+        # Save to database
+        try:
+            user_mappings = bot_instance.config.user_mappings.plex_to_discord if hasattr(bot_instance.config.user_mappings, 'plex_to_discord') else {}
+            save_notification(
+                notification_type='sonarr',
+                title=series_data.get('title', 'Unknown Series'),
+                year=series_data.get('year'),
+                media_type='episode',
+                season_number=latest_season_num,
+                episode_number=latest_episode_num,
+                episode_title=latest_episode_title,
+                quality=quality_string,
+                poster_url=poster_url if poster_url and poster_url.startswith("http") else None,
+                fanart_url=fanart_url if fanart_url and fanart_url.startswith("http") else None,
+                episodes=all_episodes,
+                notified_user_ids=list(users_to_ping) if users_to_ping else None,
+                user_mappings=user_mappings
+            )
+        except Exception as e:
+            logger.error(f"Error saving notification to database: {e}", exc_info=True)
 
         # Trigger Plex scan if enabled
         if bot_instance.config.plex.scan_on_notification and bot_instance.config.plex.enabled:
@@ -566,7 +600,8 @@ async def radarr_webhook_detailed():
             if backdrop_path:
                 backdrop_url = f"https://image.tmdb.org/t/p/w1280{backdrop_path}"
 
-        NOTIFICATION_HISTORY.append({
+        # Save to in-memory history (for backward compatibility)
+        notification_data = {
             'type': 'radarr',
             'title': title,
             'year': year,
@@ -574,7 +609,25 @@ async def radarr_webhook_detailed():
             'timestamp': datetime.now().isoformat(),
             'poster_url': poster_url,
             'backdrop_url': backdrop_url
-        })
+        }
+        NOTIFICATION_HISTORY.append(notification_data)
+        
+        # Save to database
+        try:
+            user_mappings = bot_instance.config.user_mappings.plex_to_discord if hasattr(bot_instance.config.user_mappings, 'plex_to_discord') else {}
+            save_notification(
+                notification_type='radarr',
+                title=title,
+                year=year,
+                media_type='movie',
+                quality=quality,
+                poster_url=poster_url,
+                backdrop_url=backdrop_url,
+                notified_user_ids=list(user_ids_to_notify) if user_ids_to_notify else None,
+                user_mappings=user_mappings
+            )
+        except Exception as e:
+            logger.error(f"Error saving notification to database: {e}", exc_info=True)
 
         # Trigger Plex scan if enabled
         if config.plex.scan_on_notification and config.plex.enabled:
@@ -748,22 +801,83 @@ def api_status():
 @app.route('/api/notifications', methods=['GET'])
 def api_notifications():
     """Returns recent notification history."""
-    # Filter notifications from last 24 hours
-    from datetime import timedelta
-    cutoff = datetime.now() - timedelta(hours=24)
+    try:
+        # Get from database first (persistent)
+        db_notifications = get_recent_notifications(hours=24, limit=100)
+        
+        # Convert database format to API format
+        notifications = []
+        for notif in db_notifications:
+            api_notif = {
+                'type': notif['notification_type'],
+                'title': notif['title'],
+                'year': notif.get('year'),
+                'quality': notif.get('quality'),
+                'timestamp': notif['timestamp'],
+                'poster_url': notif.get('poster_url'),
+                'fanart_url': notif.get('fanart_url'),
+                'backdrop_url': notif.get('backdrop_url'),
+            }
+            
+            if notif.get('episodes'):
+                api_notif['episodes'] = notif['episodes']
+            elif notif.get('season_number') and notif.get('episode_number'):
+                api_notif['episode'] = {
+                    'season': notif['season_number'],
+                    'number': notif['episode_number'],
+                    'title': notif.get('episode_title', '')
+                }
+            
+            notifications.append(api_notif)
+        
+        # Fallback to in-memory if database is empty (backward compatibility)
+        if not notifications:
+            from datetime import timedelta
+            cutoff = datetime.now() - timedelta(hours=24)
+            recent = [
+                notif for notif in NOTIFICATION_HISTORY
+                if datetime.fromisoformat(notif['timestamp']) > cutoff
+            ]
+            recent.sort(key=lambda x: x['timestamp'], reverse=True)
+            notifications = recent
 
-    recent = [
-        notif for notif in NOTIFICATION_HISTORY
-        if datetime.fromisoformat(notif['timestamp']) > cutoff
-    ]
+        return jsonify({
+            "notifications": notifications,
+            "total": len(notifications)
+        })
+    except Exception as e:
+        logger.error(f"Error getting notifications: {e}", exc_info=True)
+        # Fallback to in-memory
+        from datetime import timedelta
+        cutoff = datetime.now() - timedelta(hours=24)
+        recent = [
+            notif for notif in NOTIFICATION_HISTORY
+            if datetime.fromisoformat(notif['timestamp']) > cutoff
+        ]
+        recent.sort(key=lambda x: x['timestamp'], reverse=True)
+        return jsonify({
+            "notifications": recent,
+            "total": len(recent)
+        })
 
-    # Sort by timestamp, newest first
-    recent.sort(key=lambda x: x['timestamp'], reverse=True)
 
-    return jsonify({
-        "notifications": recent,
-        "total": len(recent)
-    })
+@app.route('/api/user-notification-counts', methods=['GET'])
+def api_user_notification_counts():
+    """Returns notification counts for all users."""
+    try:
+        user_counts = get_user_notification_counts()
+        return jsonify({
+            "success": True,
+            "user_counts": user_counts,
+            "total_users": len(user_counts)
+        })
+    except Exception as e:
+        logger.error(f"Error getting user notification counts: {e}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "message": f"Error: {str(e)}",
+            "user_counts": []
+        }), 500
 
 
 @app.route('/api/config', methods=['GET'])
