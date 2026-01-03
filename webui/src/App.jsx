@@ -428,6 +428,37 @@ function App() {
 								</div>
 							</div>
 
+							{userNotificationCounts.length > 0 && (
+								<div className="dashboard-card dashboard-card-wide">
+									<div className="card-header">
+										<h3>User Notification Counts</h3>
+										<span className="card-icon">👥</span>
+									</div>
+									<div className="card-content">
+										<div className="user-counts-list">
+											{userNotificationCounts.slice(0, 10).map((user, idx) => (
+												<div key={user.discord_user_id || idx} className="user-count-item">
+													<div className="user-count-info">
+														<span className="user-count-name">
+															{user.plex_username || `User ${user.discord_user_id?.slice(-4) || 'Unknown'}`}
+														</span>
+														{user.plex_username && (
+															<span className="user-count-id">ID: {user.discord_user_id?.slice(-8)}</span>
+														)}
+													</div>
+													<div className="user-count-badge">{user.notification_count || 0}</div>
+												</div>
+											))}
+											{userNotificationCounts.length > 10 && (
+												<div className="more-items">
+													+{userNotificationCounts.length - 10} more users
+												</div>
+											)}
+										</div>
+									</div>
+								</div>
+							)}
+
 							{/* Quick Actions Card */}
 							<div className="dashboard-card dashboard-card-wide">
 								<div className="card-header">
