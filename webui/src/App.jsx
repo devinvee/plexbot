@@ -49,13 +49,20 @@ function App() {
 		fetchNotifications();
 		fetchPendingScans();
 		fetchPlexActivities();
-		const interval = setInterval(() => {
-			fetchStatus();
-			fetchNotifications();
+		// Refresh scans and activities more frequently (2 seconds) for real-time updates
+		const scanInterval = setInterval(() => {
 			fetchPendingScans();
 			fetchPlexActivities();
-		}, 5000); // Refresh every 5 seconds
-		return () => clearInterval(interval);
+		}, 2000); // Refresh scans every 2 seconds
+		// Refresh other data less frequently (5 seconds)
+		const statusInterval = setInterval(() => {
+			fetchStatus();
+			fetchNotifications();
+		}, 5000); // Refresh status every 5 seconds
+		return () => {
+			clearInterval(scanInterval);
+			clearInterval(statusInterval);
+		};
 	}, []);
 
 	const fetchStatus = async () => {
@@ -322,7 +329,19 @@ function App() {
 				</section>
 
 				<section className="pending-scans-section">
-					<h2>Pending Scans</h2>
+					<div className="section-header-with-refresh">
+						<h2>Pending Scans</h2>
+						<button
+							className="btn btn-secondary btn-small"
+							onClick={() => {
+								fetchPendingScans();
+								fetchPlexActivities();
+							}}
+							title="Refresh scan status"
+						>
+							🔄 Refresh
+						</button>
+					</div>
 					{pendingScans.length > 0 ? (
 						<div className="pending-scans-list">
 							{pendingScans.map((scan) => (
@@ -354,7 +373,19 @@ function App() {
 
 				{plexActivities.length > 0 && (
 					<section className="plex-activities-section">
-						<h2>Plex Activities & Queued Scans</h2>
+						<div className="section-header-with-refresh">
+							<h2>Plex Activities & Queued Scans</h2>
+							<button
+								className="btn btn-secondary btn-small"
+								onClick={() => {
+									fetchPlexActivities();
+									fetchPendingScans();
+								}}
+								title="Refresh activities"
+							>
+								🔄 Refresh
+							</button>
+						</div>
 						<div className="activities-list">
 							{plexActivities.map((activity, idx) => (
 								<div key={activity.uuid || idx} className="activity-card">

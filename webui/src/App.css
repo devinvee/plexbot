@@ -1086,6 +1086,18 @@ body {
 	margin-bottom: 2rem;
 }
 
+.section-header-with-refresh {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin-bottom: 1rem;
+}
+
+.section-header-with-refresh h2 {
+	margin: 0;
+	font-size: 1.5rem;
+}
+
 .pending-scans-section h2 {
 	margin-bottom: 1rem;
 	font-size: 1.5rem;
@@ -1164,7 +1176,7 @@ body {
 }
 
 .plex-activities-section h2 {
-	margin-bottom: 1rem;
+	margin: 0;
 	font-size: 1.5rem;
 }
 
