@@ -77,29 +77,33 @@ def create_webhook(arr_url: str, arr_api_key: str, webhook_url: str, arr_type: s
             name = f"PlexBot {arr_type.capitalize()} Webhook"
         
         # Determine which events to listen to based on ARR type
-        if arr_type.lower() == 'sonarr':
-            on_grab = True
-            on_download = True
-            on_upgrade = True
+        arr_type_lower = arr_type.lower()
+        
+        # Common events for all ARR types
+        on_grab = True
+        on_download = True
+        on_upgrade = True
+        on_health_issue = False
+        
+        # Type-specific events
+        on_rename = False
+        on_series_delete = False
+        on_episode_file_delete = False
+        on_movie_delete = False
+        on_book_delete = False
+        on_author_delete = False
+        
+        if arr_type_lower == 'sonarr':
             on_rename = False
             on_series_delete = False
             on_episode_file_delete = False
-            on_health_issue = False
-        elif arr_type.lower() == 'radarr':
-            on_grab = True
-            on_download = True
-            on_upgrade = True
+        elif arr_type_lower == 'radarr':
             on_rename = False
             on_movie_delete = False
-            on_health_issue = False
-        elif arr_type.lower() == 'readarr':
-            on_grab = True
-            on_download = True
-            on_upgrade = True
+        elif arr_type_lower == 'readarr':
             on_rename = True
             on_book_delete = False
             on_author_delete = False
-            on_health_issue = False
         else:
             return {"success": False, "message": f"Unknown ARR type: {arr_type}"}
         
@@ -109,11 +113,6 @@ def create_webhook(arr_url: str, arr_api_key: str, webhook_url: str, arr_type: s
             "onDownload": on_download,
             "onUpgrade": on_upgrade,
             "onRename": on_rename,
-            "onSeriesDelete": on_series_delete if arr_type.lower() == 'sonarr' else False,
-            "onEpisodeFileDelete": on_episode_file_delete if arr_type.lower() == 'sonarr' else False,
-            "onMovieDelete": on_movie_delete if arr_type.lower() == 'radarr' else False,
-            "onBookDelete": on_book_delete if arr_type.lower() == 'readarr' else False,
-            "onAuthorDelete": on_author_delete if arr_type.lower() == 'readarr' else False,
             "onHealthIssue": on_health_issue,
             "onApplicationUpdate": False,
             "includeHealthWarnings": False,
@@ -141,12 +140,12 @@ def create_webhook(arr_url: str, arr_api_key: str, webhook_url: str, arr_type: s
         }
         
         # Add type-specific fields
-        if arr_type.lower() == 'sonarr':
+        if arr_type_lower == 'sonarr':
             notification_data["onSeriesDelete"] = on_series_delete
             notification_data["onEpisodeFileDelete"] = on_episode_file_delete
-        elif arr_type.lower() == 'radarr':
+        elif arr_type_lower == 'radarr':
             notification_data["onMovieDelete"] = on_movie_delete
-        elif arr_type.lower() == 'readarr':
+        elif arr_type_lower == 'readarr':
             notification_data["onBookDelete"] = on_book_delete
             notification_data["onAuthorDelete"] = on_author_delete
         
@@ -159,8 +158,8 @@ def create_webhook(arr_url: str, arr_api_key: str, webhook_url: str, arr_type: s
         response = requests.post(api_url, json=notification_data, headers=headers, timeout=10)
         response.raise_for_status()
         
-        logger.info(f"Successfully created webhook for {arr_type} at {arr_url}")
-        return {"success": True, "message": f"Webhook created successfully"}
+        logger.info("Successfully created webhook for %s at %s", arr_type, arr_url)
+        return {"success": True, "message": "Webhook created successfully"}
         
     except requests.exceptions.RequestException as e:
         error_msg = f"Failed to create webhook: {str(e)}"
@@ -169,7 +168,7 @@ def create_webhook(arr_url: str, arr_api_key: str, webhook_url: str, arr_type: s
         logger.error(error_msg)
         return {"success": False, "message": error_msg}
     except Exception as e:
-        logger.error(f"Error creating webhook for {arr_type}: {e}", exc_info=True)
+        logger.error("Error creating webhook for %s: %s", arr_type, e, exc_info=True)
         return {"success": False, "message": f"Error: {str(e)}"}
 
 
@@ -195,7 +194,7 @@ def test_arr_connection(arr_url: str, arr_api_key: str, arr_type: str = "sonarr"
         data = response.json()
         version = data.get('version', 'Unknown')
         
-        logger.info(f"Successfully connected to {arr_type} at {arr_url} (version {version})")
+        logger.info("Successfully connected to %s at %s (version %s)", arr_type, arr_url, version)
         return {
             "success": True,
             "message": f"Connected successfully (version {version})",
@@ -211,7 +210,7 @@ def test_arr_connection(arr_url: str, arr_api_key: str, arr_type: str = "sonarr"
         logger.error(error_msg)
         return {"success": False, "message": error_msg}
     except Exception as e:
-        logger.error(f"Error testing {arr_type} connection: {e}", exc_info=True)
+        logger.error("Error testing %s connection: %s", arr_type, e, exc_info=True)
         return {"success": False, "message": f"Error: {str(e)}"}
 
 
